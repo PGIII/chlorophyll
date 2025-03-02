@@ -193,6 +193,7 @@ dependencies = [
  "serde",
  "serde-json-core",
  "smart-leds 0.3.0",
+ "ssd1680",
  "static_cell",
  "tb6612fng",
  "usbd-hid",
@@ -1719,6 +1720,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 dependencies = [
  "lock_api",
+]
+
+[[package]]
+name = "ssd1680"
+version = "0.2.0"
+source = "git+https://github.com/PGIII/ssd1680?branch=display-interface#c5c7c903f83d82f4fa85d5bb2457b864bd82d3f2"
+dependencies = [
+ "display-interface",
+ "embedded-graphics",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
 ]
 
 [[package]]

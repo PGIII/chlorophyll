@@ -57,6 +57,7 @@ portable-atomic = { version = "1.5", features = ["critical-section"] }
 log = "0.4"
 rand = { version = "0.8.5", default-features = false }
 embedded-sdmmc = "0.7.0"
+ssd1680 = {git = "https://github.com/PGIII/ssd1680", branch="display-interface"}
 
 [profile.release]
 debug = 2
