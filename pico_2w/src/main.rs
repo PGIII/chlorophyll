@@ -7,15 +7,13 @@
 
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use defmt::*;
-use display_interface_spi::SPIInterface;
-use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
 use embassy_rp::block::ImageDef;
 use embassy_rp::gpio::{Input, Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
-use embassy_rp::spi::{self, Config};
+use embassy_rp::spi::{Config};
 use embassy_rp::spi::{Blocking, Spi};
 use embassy_time::{Delay, Duration, Timer};
 use embedded_graphics::geometry::Point;
