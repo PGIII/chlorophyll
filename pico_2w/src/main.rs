@@ -7,13 +7,26 @@
 
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use defmt::*;
+use display_interface_spi::SPIInterface;
+use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
 use embassy_rp::block::ImageDef;
-use embassy_rp::gpio::{Level, Output};
+use embassy_rp::gpio::{Input, Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
-use embassy_time::{Duration, Timer};
+use embassy_rp::spi::{self, Config};
+use embassy_rp::spi::{Blocking, Spi};
+use embassy_time::{Delay, Duration, Timer};
+use embedded_graphics::geometry::Point;
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::iso_8859_5::FONT_6X9;
+use embedded_graphics::pixelcolor::BinaryColor;
+use embedded_graphics::prelude::*;
+use embedded_graphics::text::Text;
+use embedded_hal_bus::spi::ExclusiveDevice;
+use ssd1680::driver::Ssd1680;
+use ssd1680::graphics::{Display, Display2in13, DisplayRotation};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -82,6 +95,41 @@ async fn main(spawner: Spawner) {
     control
         .set_power_management(cyw43::PowerManagementMode::PowerSave)
         .await;
+
+    println!("Building display");
+    let spi = p.SPI0;
+    let rst = Output::new(p.PIN_0, Level::Low);
+    let dc = Output::new(p.PIN_4, Level::Low);
+    let busy = Input::new(p.PIN_1, embassy_rp::gpio::Pull::Up);
+    let sclk = p.PIN_2;
+    let mosi = p.PIN_3;
+    let cs = Output::new(p.PIN_5, Level::High);
+
+    let spi: Spi<'_, _, Blocking> = Spi::new_blocking_txonly(spi, sclk, mosi, Config::default());
+
+    let spi_device = ExclusiveDevice::new(spi, cs, Delay);
+    let disp_interface = display_interface_spi::SPIInterface::new(spi_device, dc);
+    let mut delay = Delay;
+    let mut ssd1680 = Ssd1680::new(disp_interface, busy, rst, &mut delay).unwrap();
+    ssd1680.clear_bw_frame().unwrap();
+    let mut display_bw = Display2in13::bw();
+    display_bw.set_rotation(DisplayRotation::Rotate90);
+    println!("drawing display");
+    // background fill
+    display_bw
+        .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
+        .unwrap();
+
+    Text::new(
+        "hello from pico 2",
+        Point::new(10, 10),
+        MonoTextStyle::new(&FONT_6X9, BinaryColor::Off),
+    )
+    .draw(&mut display_bw)
+    .unwrap();
+    println!("updating display");
+    ssd1680.update_bw_frame(display_bw.buffer()).unwrap();
+    ssd1680.display_frame(&mut delay).unwrap();
 
     let delay = Duration::from_millis(250);
     loop {
