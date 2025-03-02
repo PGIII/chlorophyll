@@ -13,7 +13,7 @@ use embassy_rp::block::ImageDef;
 use embassy_rp::gpio::{Input, Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
-use embassy_rp::spi::{Config};
+use embassy_rp::spi::Config;
 use embassy_rp::spi::{Blocking, Spi};
 use embassy_time::{Delay, Duration, Timer};
 use embedded_graphics::geometry::Point;
@@ -111,7 +111,7 @@ async fn main(spawner: Spawner) {
     let mut ssd1680 = Ssd1680::new(disp_interface, busy, rst, &mut delay).unwrap();
     ssd1680.clear_bw_frame().unwrap();
     let mut display_bw = Display2in13::bw();
-    display_bw.set_rotation(DisplayRotation::Rotate90);
+    display_bw.set_rotation(DisplayRotation::Rotate0);
     println!("drawing display");
     // background fill
     display_bw
@@ -131,11 +131,9 @@ async fn main(spawner: Spawner) {
 
     let delay = Duration::from_millis(250);
     loop {
-        info!("led on!");
         control.gpio_set(0, true).await;
         Timer::after(delay).await;
 
-        info!("led off!");
         control.gpio_set(0, false).await;
         Timer::after(delay).await;
     }
