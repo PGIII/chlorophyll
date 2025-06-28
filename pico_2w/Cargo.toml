@@ -58,6 +58,7 @@ log = "0.4"
 rand = { version = "0.8.5", default-features = false }
 embedded-sdmmc = "0.7.0"
 ssd1680 = {git = "https://github.com/PGIII/ssd1680", branch="display-interface"}
+aht20-driver = { version = "1.2.2", default-features = false , features = ["use-defmt"] }
 
 [profile.release]
 debug = 2

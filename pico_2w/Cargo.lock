@@ -24,6 +24,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aht20-driver"
+version = "1.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d71585058621677250a5493532187c25b1f00772f78c1eff8e9c3f9708696f6f"
+dependencies = [
+ "crc-any",
+ "defmt",
+ "embedded-hal 0.2.7",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -154,6 +165,7 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 name = "chlorophyll"
 version = "0.1.0"
 dependencies = [
+ "aht20-driver",
  "assign-resources",
  "byte-slice-cast",
  "cortex-m",

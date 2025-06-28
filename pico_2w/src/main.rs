@@ -5,24 +5,31 @@
 #![no_std]
 #![no_main]
 
+mod temp_humidity_sensor;
+
+use core::fmt::Write;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
-use defmt::*;
+use defmt::{self, info, println};
 use embassy_executor::Spawner;
-use embassy_rp::bind_interrupts;
 use embassy_rp::block::ImageDef;
 use embassy_rp::gpio::{Input, Level, Output};
-use embassy_rp::peripherals::{DMA_CH0, PIO0};
+use embassy_rp::peripherals::{DMA_CH0, I2C1, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
-use embassy_rp::spi::Config;
+use embassy_rp::spi;
 use embassy_rp::spi::{Blocking, Spi};
+use embassy_rp::{
+    bind_interrupts,
+    i2c::{self, InterruptHandler as I2CInterruptHandler},
+};
 use embassy_time::{Delay, Duration, Timer};
 use embedded_graphics::geometry::Point;
 use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::mono_font::iso_8859_5::FONT_6X9;
+use embedded_graphics::mono_font::iso_8859_5::{FONT_6X9, FONT_9X15_BOLD};
 use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
 use embedded_hal_bus::spi::ExclusiveDevice;
+use heapless::String;
 use ssd1680::driver::Ssd1680;
 use ssd1680::graphics::{Display, Display2in13, DisplayRotation};
 use static_cell::StaticCell;
@@ -48,6 +55,7 @@ pub static PICOTOOL_ENTRIES: [embassy_rp::binary_info::EntryAddr; 4] = [
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
+    I2C1_IRQ => I2CInterruptHandler<I2C1>;
 });
 
 #[embassy_executor::task]
@@ -87,7 +95,7 @@ async fn main(spawner: Spawner) {
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
     let state = STATE.init(cyw43::State::new());
     let (_net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
-    unwrap!(spawner.spawn(cyw43_task(runner)));
+    defmt::unwrap!(spawner.spawn(cyw43_task(runner)));
 
     control.init(clm).await;
     control
@@ -103,7 +111,8 @@ async fn main(spawner: Spawner) {
     let mosi = p.PIN_3;
     let cs = Output::new(p.PIN_5, Level::High);
 
-    let spi: Spi<'_, _, Blocking> = Spi::new_blocking_txonly(spi, sclk, mosi, Config::default());
+    let spi: Spi<'_, _, Blocking> =
+        Spi::new_blocking_txonly(spi, sclk, mosi, spi::Config::default());
 
     let spi_device = ExclusiveDevice::new(spi, cs, Delay);
     let disp_interface = display_interface_spi::SPIInterface::new(spi_device, dc);
@@ -118,22 +127,39 @@ async fn main(spawner: Spawner) {
         .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
         .unwrap();
 
-    Text::new(
-        "hello from pico 2",
-        Point::new(10, 10),
-        MonoTextStyle::new(&FONT_6X9, BinaryColor::Off),
-    )
-    .draw(&mut display_bw)
-    .unwrap();
-    println!("updating display");
-    ssd1680.update_bw_frame(display_bw.buffer()).unwrap();
-    ssd1680.display_frame(&mut delay).unwrap();
+    info!("set up i2c ");
+    let sda = p.PIN_14;
+    let scl = p.PIN_15;
+    let i2c = i2c::I2c::new_async(p.I2C1, scl, sda, Irqs, i2c::Config::default());
+    let timer = &mut Delay;
+    let mut aht20_uninit = aht20_driver::AHT20::new(i2c, aht20_driver::SENSOR_ADDRESS);
+    let mut aht20 = aht20_uninit.init(timer).unwrap();
 
-    let delay = Duration::from_millis(250);
+    let delay = Duration::from_millis(5000);
     loop {
         control.gpio_set(0, true).await;
         Timer::after(delay).await;
-
+        let measure = aht20.measure(timer).unwrap();
+        let mut msg: String<200> = String::new();
+        write!(
+            msg,
+            "{:.2}F {:.2}%",
+            measure.temperature * 9.0 / 5.0 + 32.0,
+            measure.humidity
+        )
+        .unwrap();
+        display_bw
+            .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
+            .unwrap();
+        Text::new(
+            &msg,
+            Point::new(5, 10),
+            MonoTextStyle::new(&FONT_9X15_BOLD, BinaryColor::Off),
+        )
+        .draw(&mut display_bw)
+        .unwrap();
+        ssd1680.update_bw_frame(display_bw.buffer()).unwrap();
+        ssd1680.display_frame(timer).unwrap();
         control.gpio_set(0, false).await;
         Timer::after(delay).await;
     }
