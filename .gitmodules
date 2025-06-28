@@ -1,0 +1,3 @@
+[submodule "ssd1680"]
+	path = ssd1680
+	url = git@github.com:PGIII/ssd1680.git

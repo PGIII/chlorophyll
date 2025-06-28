@@ -8,10 +8,15 @@
 mod temp_humidity_sensor;
 
 use core::fmt::Write;
+use core::str::from_utf8;
+use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
-use defmt::{self, info, println};
+use defmt::{self, info, println, unwrap, warn};
 use embassy_executor::Spawner;
+use embassy_net::StackResources;
+use embassy_net::tcp::TcpSocket;
 use embassy_rp::block::ImageDef;
+use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::{Input, Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, I2C1, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
@@ -29,11 +34,17 @@ use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
 use embedded_hal_bus::spi::ExclusiveDevice;
+use embedded_io_async::Write as _;
 use heapless::String;
+use rand::RngCore;
 use ssd1680::driver::Ssd1680;
 use ssd1680::graphics::{Display, Display2in13, DisplayRotation};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
+
+static_toml::static_toml! {
+    static CONFIG = include_toml!("config.toml");
+}
 
 #[unsafe(link_section = ".start_block")]
 #[used]
@@ -65,9 +76,15 @@ async fn cyw43_task(
     runner.run().await
 }
 
+#[embassy_executor::task]
+async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'static>>) -> ! {
+    runner.run().await
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
+    let mut rng = RoscRng;
     let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
     let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
 
@@ -94,7 +111,7 @@ async fn main(spawner: Spawner) {
 
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
     let state = STATE.init(cyw43::State::new());
-    let (_net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
+    let (net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
     defmt::unwrap!(spawner.spawn(cyw43_task(runner)));
 
     control.init(clm).await;
@@ -102,7 +119,41 @@ async fn main(spawner: Spawner) {
         .set_power_management(cyw43::PowerManagementMode::PowerSave)
         .await;
 
-    println!("Building display");
+    let net_config = embassy_net::Config::dhcpv4(Default::default());
+    let seed = rng.next_u64();
+
+    info!("Setting up Network");
+    static RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
+    let (stack, runner) = embassy_net::new(
+        net_device,
+        net_config,
+        RESOURCES.init(StackResources::new()),
+        seed,
+    );
+    unwrap!(spawner.spawn(net_task(runner)));
+    loop {
+        match control
+            .join(
+                CONFIG.wifi.ssid,
+                JoinOptions::new(CONFIG.wifi.password.as_bytes()),
+            )
+            .await
+        {
+            Ok(_) => break,
+            Err(err) => {
+                info!("join failed with status={}", err.status);
+            }
+        }
+    }
+
+    // Wait for DHCP, not necessary when using static IP
+    info!("waiting for DHCP...");
+    while !stack.is_config_up() {
+        Timer::after_millis(100).await;
+    }
+    info!("DHCP is now up!");
+
+    info!("Building display");
     let spi = p.SPI0;
     let rst = Output::new(p.PIN_0, Level::Low);
     let dc = Output::new(p.PIN_4, Level::Low);
@@ -120,7 +171,7 @@ async fn main(spawner: Spawner) {
     let mut ssd1680 = Ssd1680::new(disp_interface, busy, rst, &mut delay).unwrap();
     ssd1680.clear_bw_frame().unwrap();
     let mut display_bw = Display2in13::bw();
-    display_bw.set_rotation(DisplayRotation::Rotate0);
+    display_bw.set_rotation(DisplayRotation::Rotate90);
     println!("drawing display");
     // background fill
     display_bw
@@ -136,7 +187,49 @@ async fn main(spawner: Spawner) {
     let mut aht20 = aht20_uninit.init(timer).unwrap();
 
     let delay = Duration::from_millis(5000);
+
+    let mut rx_buffer = [0; 4096];
+    let mut tx_buffer = [0; 4096];
+    let mut buf = [0; 4096];
+
     loop {
+        let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+        socket.set_timeout(Some(Duration::from_secs(10)));
+
+        control.gpio_set(0, false).await;
+        info!("Listening on TCP:1234...");
+        if let Err(e) = socket.accept(1234).await {
+            warn!("accept error: {:?}", e);
+            continue;
+        }
+
+        info!("Received connection from {:?}", socket.remote_endpoint());
+        control.gpio_set(0, true).await;
+
+        loop {
+            let n = match socket.read(&mut buf).await {
+                Ok(0) => {
+                    warn!("read EOF");
+                    break;
+                }
+                Ok(n) => n,
+                Err(e) => {
+                    warn!("read error: {:?}", e);
+                    break;
+                }
+            };
+
+            info!("rxd {}", from_utf8(&buf[..n]).unwrap());
+
+            match socket.write_all(&buf[..n]).await {
+                Ok(()) => {}
+                Err(e) => {
+                    warn!("write error: {:?}", e);
+                    break;
+                }
+            };
+        }
+
         control.gpio_set(0, true).await;
         Timer::after(delay).await;
         let measure = aht20.measure(timer).unwrap();
