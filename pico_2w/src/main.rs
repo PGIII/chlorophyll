@@ -188,21 +188,24 @@ async fn main(spawner: Spawner) {
 
     let delay = Duration::from_millis(5000);
 
+    /*
     let mut rx_buffer = [0; 4096];
     let mut tx_buffer = [0; 4096];
     let mut buf = [0; 4096];
+    */
 
     loop {
+        /*
         let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
         socket.set_timeout(Some(Duration::from_secs(10)));
 
         control.gpio_set(0, false).await;
+
         info!("Listening on TCP:1234...");
         if let Err(e) = socket.accept(1234).await {
             warn!("accept error: {:?}", e);
             continue;
         }
-
         info!("Received connection from {:?}", socket.remote_endpoint());
         control.gpio_set(0, true).await;
 
@@ -229,6 +232,7 @@ async fn main(spawner: Spawner) {
                 }
             };
         }
+        */
 
         control.gpio_set(0, true).await;
         Timer::after(delay).await;
