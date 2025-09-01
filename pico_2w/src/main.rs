@@ -8,15 +8,15 @@
 mod temp_humidity_sensor;
 
 use core::fmt::Write;
-use core::str::from_utf8;
+use core::net::Ipv4Addr;
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use defmt::{self, info, println, unwrap, warn};
 use embassy_executor::Spawner;
-use embassy_net::StackResources;
-use embassy_net::tcp::TcpSocket;
-use embassy_rp::block::ImageDef;
-use embassy_rp::clocks::RoscRng;
+use embassy_net::{
+    IpEndpoint, StackResources,
+    udp::{PacketMetadata, UdpSocket},
+};
 use embassy_rp::gpio::{Input, Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, I2C1, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
@@ -26,15 +26,15 @@ use embassy_rp::{
     bind_interrupts,
     i2c::{self, InterruptHandler as I2CInterruptHandler},
 };
+use embassy_rp::{block::ImageDef, clocks::RoscRng};
 use embassy_time::{Delay, Duration, Timer};
 use embedded_graphics::geometry::Point;
 use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::mono_font::iso_8859_5::{FONT_6X9, FONT_9X15_BOLD};
+use embedded_graphics::mono_font::iso_8859_5::FONT_9X15_BOLD;
 use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
 use embedded_hal_bus::spi::ExclusiveDevice;
-use embedded_io_async::Write as _;
 use heapless::String;
 use rand::RngCore;
 use ssd1680::driver::Ssd1680;
@@ -152,6 +152,8 @@ async fn main(spawner: Spawner) {
         Timer::after_millis(100).await;
     }
     info!("DHCP is now up!");
+    let multicast_addr = Ipv4Addr::new(239, 0, 0, 1);
+    stack.join_multicast_group(multicast_addr).unwrap();
 
     info!("Building display");
     let spi = p.SPI0;
@@ -188,51 +190,35 @@ async fn main(spawner: Spawner) {
 
     let delay = Duration::from_millis(5000);
 
-    /*
     let mut rx_buffer = [0; 4096];
     let mut tx_buffer = [0; 4096];
-    let mut buf = [0; 4096];
-    */
+
+    let mut rx_meta = [PacketMetadata::EMPTY; 16];
+    let mut tx_meta = [PacketMetadata::EMPTY; 16];
+
+    let endpoint = IpEndpoint::new(multicast_addr.into(), 5000);
 
     loop {
-        /*
-        let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-        socket.set_timeout(Some(Duration::from_secs(10)));
-
-        control.gpio_set(0, false).await;
-
-        info!("Listening on TCP:1234...");
-        if let Err(e) = socket.accept(1234).await {
-            warn!("accept error: {:?}", e);
-            continue;
-        }
-        info!("Received connection from {:?}", socket.remote_endpoint());
-        control.gpio_set(0, true).await;
+        let mut socket = UdpSocket::new(
+            stack,
+            &mut rx_meta,
+            &mut rx_buffer,
+            &mut tx_meta,
+            &mut tx_buffer,
+        );
+        socket.bind(5000).unwrap();
 
         loop {
-            let n = match socket.read(&mut buf).await {
-                Ok(0) => {
-                    warn!("read EOF");
-                    break;
-                }
-                Ok(n) => n,
-                Err(e) => {
-                    warn!("read error: {:?}", e);
-                    break;
-                }
-            };
-
-            info!("rxd {}", from_utf8(&buf[..n]).unwrap());
-
-            match socket.write_all(&buf[..n]).await {
+            info!("Writing hello");
+            match socket.send_to("Hello!".as_bytes(), endpoint).await {
                 Ok(()) => {}
                 Err(e) => {
                     warn!("write error: {:?}", e);
                     break;
                 }
             };
+            Timer::after(delay).await;
         }
-        */
 
         control.gpio_set(0, true).await;
         Timer::after(delay).await;
