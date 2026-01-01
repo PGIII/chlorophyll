@@ -1,3 +1,6 @@
 [submodule "ssd1680"]
 	path = ssd1680
 	url = git@github.com:PGIII/ssd1680.git
+[submodule "rs-matter-embassy"]
+	path = rs-matter-embassy
+	url = https://github.com/sysgrok/rs-matter-embassy.git
