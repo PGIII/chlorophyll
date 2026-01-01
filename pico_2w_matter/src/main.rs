@@ -173,7 +173,7 @@ async fn main(spawner: Spawner) {
     let mut ssd1680 = Ssd1680::new(disp_interface, busy, rst, &mut delay).unwrap();
     ssd1680.clear_bw_frame().unwrap();
     let mut display_bw = Display2in13::bw();
-    display_bw.set_rotation(DisplayRotation::Rotate90);
+    display_bw.set_rotation(DisplayRotation::Rotate270);
     println!("drawing display");
     // background fill
     display_bw
@@ -190,36 +190,7 @@ async fn main(spawner: Spawner) {
 
     let delay = Duration::from_millis(5000);
 
-    let mut rx_buffer = [0; 4096];
-    let mut tx_buffer = [0; 4096];
-
-    let mut rx_meta = [PacketMetadata::EMPTY; 16];
-    let mut tx_meta = [PacketMetadata::EMPTY; 16];
-
-    let endpoint = IpEndpoint::new(multicast_addr.into(), 5000);
-
     loop {
-        let mut socket = UdpSocket::new(
-            stack,
-            &mut rx_meta,
-            &mut rx_buffer,
-            &mut tx_meta,
-            &mut tx_buffer,
-        );
-        socket.bind(5000).unwrap();
-
-        loop {
-            info!("Writing hello");
-            match socket.send_to("Hello!".as_bytes(), endpoint).await {
-                Ok(()) => {}
-                Err(e) => {
-                    warn!("write error: {:?}", e);
-                    break;
-                }
-            };
-            Timer::after(delay).await;
-        }
-
         control.gpio_set(0, true).await;
         Timer::after(delay).await;
         let measure = aht20.measure(timer).unwrap();
