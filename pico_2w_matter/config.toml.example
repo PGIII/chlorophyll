@@ -1,0 +1,4 @@
+[wifi]
+ssid = "ssid"
+password = "password"
+multicast_ip = "239.255.255.255:5000"
