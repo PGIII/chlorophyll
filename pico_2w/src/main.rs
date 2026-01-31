@@ -9,8 +9,7 @@ extern crate alloc;
 mod temp_humidity_sensor;
 mod temperature;
 
-use alloc::{format, string::String};
-use core::fmt::Write;
+use alloc::format;
 use core::net::Ipv4Addr;
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
