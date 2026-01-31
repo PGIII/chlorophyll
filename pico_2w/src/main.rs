@@ -4,9 +4,12 @@
 
 #![no_std]
 #![no_main]
+extern crate alloc;
 
 mod temp_humidity_sensor;
+mod temperature;
 
+use alloc::{format, string::String};
 use core::fmt::Write;
 use core::net::Ipv4Addr;
 use cyw43::JoinOptions;
@@ -36,7 +39,6 @@ use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
 use embedded_hal_bus::spi::ExclusiveDevice;
-use heapless::String;
 use rand::RngCore;
 use ssd1680::driver::Ssd1680;
 use ssd1680::graphics::{Display, Display2in13, DisplayRotation};
@@ -87,6 +89,11 @@ async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'sta
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    // Init allocator
+    unsafe {
+        embedded_alloc::init!(HEAP, 1024);
+    }
+
     let p = embassy_rp::init(Default::default());
     let mut rng = RoscRng;
     let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
@@ -177,7 +184,7 @@ async fn main(spawner: Spawner) {
     let mut ssd1680 = Ssd1680::new(disp_interface, busy, rst, &mut delay).unwrap();
     ssd1680.clear_bw_frame().unwrap();
     let mut display_bw = Display2in13::bw();
-    display_bw.set_rotation(DisplayRotation::Rotate90);
+    display_bw.set_rotation(DisplayRotation::Rotate270);
     println!("drawing display");
     // background fill
     display_bw
@@ -202,39 +209,24 @@ async fn main(spawner: Spawner) {
 
     let endpoint = IpEndpoint::new(multicast_addr.into(), 5000);
 
+    let mut msg;
+    let mut socket = UdpSocket::new(
+        stack,
+        &mut rx_meta,
+        &mut rx_buffer,
+        &mut tx_meta,
+        &mut tx_buffer,
+    );
+    socket.bind(5000).unwrap();
     loop {
-        let mut socket = UdpSocket::new(
-            stack,
-            &mut rx_meta,
-            &mut rx_buffer,
-            &mut tx_meta,
-            &mut tx_buffer,
-        );
-        socket.bind(5000).unwrap();
-
-        loop {
-            info!("Writing hello");
-            match socket.send_to("Hello!".as_bytes(), endpoint).await {
-                Ok(()) => {}
-                Err(e) => {
-                    warn!("write error: {:?}", e);
-                    break;
-                }
-            };
-            Timer::after(delay).await;
-        }
-
         control.gpio_set(0, true).await;
         Timer::after(delay).await;
         let measure = aht20.measure(timer).unwrap();
-        let mut msg: String<200> = String::new();
-        write!(
-            msg,
+        msg = format!(
             "{:.2}F {:.2}%",
             measure.temperature * 9.0 / 5.0 + 32.0,
             measure.humidity
-        )
-        .unwrap();
+        );
         display_bw
             .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
             .unwrap();
@@ -248,6 +240,15 @@ async fn main(spawner: Spawner) {
         ssd1680.update_bw_frame(display_bw.buffer()).unwrap();
         ssd1680.display_frame(timer).unwrap();
         control.gpio_set(0, false).await;
+
+        info!("Writing {}", msg.as_str());
+        match socket.send_to(msg.as_bytes(), endpoint).await {
+            Ok(()) => {}
+            Err(e) => {
+                warn!("write error: {:?}", e);
+                break;
+            }
+        };
         Timer::after(delay).await;
     }
 }
