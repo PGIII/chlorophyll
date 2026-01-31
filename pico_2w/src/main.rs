@@ -28,6 +28,7 @@ use embassy_rp::{
 };
 use embassy_rp::{block::ImageDef, clocks::RoscRng};
 use embassy_time::{Delay, Duration, Timer};
+use embedded_alloc::LlffHeap as Heap;
 use embedded_graphics::geometry::Point;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::iso_8859_5::FONT_9X15_BOLD;
@@ -41,6 +42,9 @@ use ssd1680::driver::Ssd1680;
 use ssd1680::graphics::{Display, Display2in13, DisplayRotation};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
+
+#[global_allocator]
+static HEAP: Heap = Heap::empty();
 
 static_toml::static_toml! {
     static CONFIG = include_toml!("config.toml");
