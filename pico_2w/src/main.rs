@@ -9,6 +9,7 @@ extern crate alloc;
 mod temp_humidity_sensor;
 mod temperature;
 
+use crate::temperature::{Celsius, Temperature};
 use alloc::format;
 use core::net::Ipv4Addr;
 use cyw43::JoinOptions;
@@ -42,6 +43,7 @@ use rand::RngCore;
 use ssd1680::driver::Ssd1680;
 use ssd1680::graphics::{Display, Display2in13, DisplayRotation};
 use static_cell::StaticCell;
+
 use {defmt_rtt as _, panic_probe as _};
 
 #[global_allocator]
@@ -221,11 +223,8 @@ async fn main(spawner: Spawner) {
         control.gpio_set(0, true).await;
         Timer::after(delay).await;
         let measure = aht20.measure(timer).unwrap();
-        msg = format!(
-            "{:.2}F {:.2}%",
-            measure.temperature * 9.0 / 5.0 + 32.0,
-            measure.humidity
-        );
+        let temp = Celsius::new(measure.temperature);
+        msg = format!("{:.2}F {:.2}%", temp.get_as_f(), measure.humidity);
         display_bw
             .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
             .unwrap();
