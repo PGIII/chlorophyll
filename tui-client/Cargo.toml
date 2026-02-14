@@ -1,0 +1,21 @@
+[package]
+name = "tui-client"
+version = "0.1.0"
+description = "TUI Client for chlorophyll based sensors"
+authors = ["Preston Garrison III <pg3@pg3.dev>"]
+license = "MIT"
+edition = "2024"
+
+[dependencies]
+crossterm = { version = "0.28.1", features = ["event-stream"] }
+futures = "0.3.31"
+ratatui = "0.30.0"
+tokio = { version = "1.40.0", features = ["full"] }
+color-eyre = "0.6.3"
+
+# Read the optimization guideline for more details: https://ratatui.rs/recipes/apps/release-your-app/#optimizations
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
