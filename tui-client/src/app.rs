@@ -1,9 +1,11 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use crate::event::{AppEvent, Event, EventHandler};
+use chlorophyll_protocol::{DataReading, postcard::from_bytes};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::DefaultTerminal;
 use tokio::net::UdpSocket;
+use tracing::*;
 
 /// Application.
 #[derive(Debug)]
@@ -16,7 +18,7 @@ pub struct App {
     pub events: EventHandler,
 
     pub socket: Option<UdpSocket>,
-    pub last_msg: Option<String>,
+    pub last_reading: Option<DataReading>,
 }
 
 impl Default for App {
@@ -26,7 +28,7 @@ impl Default for App {
             counter: 0,
             events: EventHandler::new(),
             socket: None,
-            last_msg: None,
+            last_reading: None,
         }
     }
 }
@@ -84,15 +86,21 @@ impl App {
         if let Some(sock) = &self.socket {
             let mut buf = [0u8; 1500];
             match sock.try_recv_from(&mut buf) {
-                Ok((len, _src)) => {
-                    self.last_msg = Some(String::from_utf8_lossy(&buf[..len]).into_owned());
-                }
+                Ok((len, src)) => match from_bytes(&buf[..len]) {
+                    Ok(reading) => {
+                        info!("Got msg from {}", src);
+                        self.last_reading = Some(reading);
+                    }
+                    Err(e) => {
+                        error!("Error parsing msg {e}");
+                        return;
+                    }
+                },
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     return;
                 }
                 Err(e) => {
-                    //real error
-                    eprintln!("Error reading {e}");
+                    error!("Error reading {e}");
                     return;
                 }
             }
@@ -108,10 +116,10 @@ impl App {
                 Ok(sock) => {
                     // Join the multicast group on the default interface (0.0.0.0)
                     if let Err(e) = sock.join_multicast_v4(multicast_addr, Ipv4Addr::UNSPECIFIED) {
-                        eprintln!("Couldn't join multicastg group {e}");
+                        error!("Couldn't join multicastg group {e}");
                         return;
                     }
-                    //println!("Listening for multicast on {}:{}", multicast_addr, port);
+                    info!("Listening for multicast on {}:{}", multicast_addr, port);
                     self.socket = Some(sock);
                 }
                 Err(e) => {

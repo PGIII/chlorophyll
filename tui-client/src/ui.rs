@@ -19,8 +19,9 @@ impl Widget for &App {
             .title("tui-client")
             .title_alignment(Alignment::Center)
             .border_type(BorderType::Rounded);
-        let last_msg = if let Some(last_msg) = self.last_msg.clone() {
-            last_msg
+
+        let last_msg = if let Some(last_msg) = self.last_reading.clone() {
+            format!("{:?}", last_msg)
         } else {
             String::from("")
         };

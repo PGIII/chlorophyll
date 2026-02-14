@@ -11,6 +11,8 @@ mod temperature;
 
 use crate::temperature::{Celsius, Temperature};
 use alloc::format;
+use chlorophyll_protocol::postcard::to_allocvec;
+use chlorophyll_protocol::{DataReading, DataType};
 use core::net::Ipv4Addr;
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
@@ -225,9 +227,11 @@ async fn main(spawner: Spawner) {
         let measure = aht20.measure(timer).unwrap();
         let temp = Celsius::new(measure.temperature);
         msg = format!("{:.2}F {:.2}%", temp.get_as_f(), measure.humidity);
+        let reading = DataReading::new(DataType::Temperature(temp.get_as_f()));
         display_bw
             .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
             .unwrap();
+        let serialized = to_allocvec(&reading).unwrap();
         Text::new(
             &msg,
             Point::new(5, 10),
@@ -239,8 +243,8 @@ async fn main(spawner: Spawner) {
         ssd1680.display_frame(timer).unwrap();
         control.gpio_set(0, false).await;
 
-        info!("Writing {}", msg.as_str());
-        match socket.send_to(msg.as_bytes(), endpoint).await {
+        info!("Writing to socket");
+        match socket.send_to(&serialized, endpoint).await {
             Ok(()) => {}
             Err(e) => {
                 warn!("write error: {:?}", e);

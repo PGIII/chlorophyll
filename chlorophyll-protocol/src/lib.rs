@@ -1,22 +1,20 @@
 #![no_std]
 
-// OK so we need a basic text protocol
-// I'm thinking something along the line of
-// ID COMMAND PAYLOAD
-// so a sensor command could be
-// 1 SENSOR 68 F
+pub use postcard;
+use serde::{Deserialize, Serialize};
 
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub enum DataType {
+    Temperature(f32),
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct DataReading {
+    value: DataType,
+}
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+impl DataReading {
+    pub fn new(data: DataType) -> Self {
+        Self { value: data }
     }
 }
