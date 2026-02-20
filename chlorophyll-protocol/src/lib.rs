@@ -1,5 +1,7 @@
 #![no_std]
 
+pub mod temperature;
+
 pub use postcard;
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +12,7 @@ pub enum DataType {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct DataReading {
-    value: DataType,
+    pub value: DataType,
 }
 
 impl DataReading {

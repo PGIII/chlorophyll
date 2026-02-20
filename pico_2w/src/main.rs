@@ -7,11 +7,10 @@
 extern crate alloc;
 
 mod temp_humidity_sensor;
-mod temperature;
 
-use crate::temperature::{Celsius, Temperature};
 use alloc::format;
 use chlorophyll_protocol::postcard::to_allocvec;
+use chlorophyll_protocol::temperature::{Celsius, Temperature};
 use chlorophyll_protocol::{DataReading, DataType};
 use core::net::Ipv4Addr;
 use cyw43::JoinOptions;
