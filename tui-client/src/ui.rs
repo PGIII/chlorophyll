@@ -1,11 +1,14 @@
+use std::rc::Rc;
+
 use ratatui::{
     buffer::Buffer,
-    layout::{Alignment, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Stylize},
     widgets::{Block, BorderType, Paragraph, Widget},
 };
 
 use crate::app::App;
+use crate::log_widget::LogListWidget;
 
 impl Widget for &App {
     /// Renders the user interface widgets.
@@ -15,6 +18,17 @@ impl Widget for &App {
     // - https://docs.rs/ratatui/latest/ratatui/widgets/index.html
     // - https://github.com/ratatui/ratatui/tree/master/examples
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let chunks = if self.log_state.enabled {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(3), Constraint::Percentage(33)])
+                .split(area)
+        } else {
+            Rc::from([area])
+        };
+
+        let main_area = chunks[0];
+
         let block = Block::bordered()
             .title("tui-client")
             .title_alignment(Alignment::Center)
@@ -31,7 +45,8 @@ impl Widget for &App {
                 Press `Esc`, `Ctrl-C` or `q` to stop running.\n\
                 Press left and right to increment and decrement the counter respectively.\n\
                 Counter: {}
-                Last Message: '{}'",
+                Last Message: '{}'\n\
+                Press Shift+L to toggle log panel, Up/Down to scroll, PgUp/PgDn for fast scroll",
             self.counter, last_msg
         );
 
@@ -41,6 +56,13 @@ impl Widget for &App {
             .bg(Color::Black)
             .centered();
 
-        paragraph.render(area, buf);
+        paragraph.render(main_area, buf);
+
+        if self.log_state.enabled && chunks.len() > 1 {
+            let log_area = chunks[1];
+            let logs = self.log_state.logs();
+            let log_widget = LogListWidget::new(&logs, "Logs", self.log_state.scroll);
+            log_widget.render(log_area, buf);
+        }
     }
 }

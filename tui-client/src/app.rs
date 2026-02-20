@@ -1,8 +1,9 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use crate::event::{AppEvent, Event, EventHandler};
+use crate::log_widget::LogState;
 use chlorophyll_protocol::{DataReading, postcard::from_bytes};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 use tokio::net::UdpSocket;
 use tracing::*;
@@ -19,6 +20,8 @@ pub struct App {
 
     pub socket: Option<UdpSocket>,
     pub last_reading: Option<DataReading>,
+
+    pub log_state: LogState,
 }
 
 impl Default for App {
@@ -29,14 +32,22 @@ impl Default for App {
             events: EventHandler::new(),
             socket: None,
             last_reading: None,
+            log_state: LogState::new(true),
         }
     }
 }
 
 impl App {
     /// Constructs a new instance of [`App`].
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(log_state: LogState) -> Self {
+        Self {
+            running: true,
+            counter: 0,
+            events: EventHandler::new(),
+            socket: None,
+            last_reading: None,
+            log_state,
+        }
     }
 
     /// Run the application's main loop.
@@ -47,7 +58,7 @@ impl App {
                 Event::Tick => self.tick().await,
                 Event::Crossterm(event) => match event {
                     crossterm::event::Event::Key(key_event)
-                        if key_event.kind == crossterm::event::KeyEventKind::Press =>
+                        if key_event.kind == KeyEventKind::Press =>
                     {
                         self.handle_key_events(key_event)?
                     }
@@ -70,9 +81,31 @@ impl App {
             KeyCode::Char('c' | 'C') if key_event.modifiers == KeyModifiers::CONTROL => {
                 self.events.send(AppEvent::Quit)
             }
+            KeyCode::Char('L') if key_event.modifiers == KeyModifiers::SHIFT => {
+                self.log_state.toggle();
+            }
+            KeyCode::Up => {
+                if self.log_state.enabled {
+                    self.log_state.scroll_up(1);
+                }
+            }
+            KeyCode::Down => {
+                if self.log_state.enabled {
+                    self.log_state.scroll_down(1);
+                }
+            }
+            KeyCode::PageUp => {
+                if self.log_state.enabled {
+                    self.log_state.scroll_up(10);
+                }
+            }
+            KeyCode::PageDown => {
+                if self.log_state.enabled {
+                    self.log_state.scroll_down(10);
+                }
+            }
             KeyCode::Right => self.events.send(AppEvent::Increment),
             KeyCode::Left => self.events.send(AppEvent::Decrement),
-            // Other handlers you could add here.
             _ => {}
         }
         Ok(())
@@ -93,15 +126,11 @@ impl App {
                     }
                     Err(e) => {
                         error!("Error parsing msg {e}");
-                        return;
                     }
                 },
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    return;
-                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
                 Err(e) => {
                     error!("Error reading {e}");
-                    return;
                 }
             }
         } else {
@@ -124,7 +153,6 @@ impl App {
                 }
                 Err(e) => {
                     eprintln!("Couldn't open socket {e}");
-                    return;
                 }
             }
         }
