@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use chrono::Local;
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -34,8 +35,12 @@ impl Widget for &App {
             .title_alignment(Alignment::Center)
             .border_type(BorderType::Rounded);
 
-        let last_msg = if let Some(last_msg) = self.last_reading.clone() {
-            format!("{:?}", last_msg)
+        let last_msg = if let Some(last_msg) = self.last_reading.last() {
+            let time = last_msg
+                .timestamp
+                .with_timezone(&Local)
+                .format("[%H:%M:%S]");
+            format!("{time} {:?}", last_msg.reading, )
         } else {
             String::from("")
         };

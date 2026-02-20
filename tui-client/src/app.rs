@@ -3,6 +3,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use crate::event::{AppEvent, Event, EventHandler};
 use crate::log_widget::LogState;
 use chlorophyll_protocol::{DataReading, postcard::from_bytes};
+use chrono::{DateTime, Utc};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 use tokio::net::UdpSocket;
@@ -19,9 +20,21 @@ pub struct App {
     pub events: EventHandler,
 
     pub socket: Option<UdpSocket>,
-    pub last_reading: Option<DataReading>,
+    pub last_reading: Vec<DataEntry>,
 
     pub log_state: LogState,
+}
+
+#[derive(Debug)]
+pub struct DataEntry {
+    pub reading: DataReading,
+    pub timestamp: DateTime<Utc>,
+}
+
+impl DataEntry {
+    pub fn new(reading: DataReading, timestamp: DateTime<Utc>) -> Self {
+        Self { reading, timestamp }
+    }
 }
 
 impl Default for App {
@@ -31,7 +44,7 @@ impl Default for App {
             counter: 0,
             events: EventHandler::new(),
             socket: None,
-            last_reading: None,
+            last_reading: Vec::new(),
             log_state: LogState::new(true),
         }
     }
@@ -45,7 +58,7 @@ impl App {
             counter: 0,
             events: EventHandler::new(),
             socket: None,
-            last_reading: None,
+            last_reading: Vec::new(),
             log_state,
         }
     }
@@ -122,7 +135,8 @@ impl App {
                 Ok((len, src)) => match from_bytes(&buf[..len]) {
                     Ok(reading) => {
                         info!("Got msg from {}", src);
-                        self.last_reading = Some(reading);
+                        let entry = DataEntry::new(reading, Utc::now());
+                        self.last_reading.push(entry);
                     }
                     Err(e) => {
                         error!("Error parsing msg {e}");
