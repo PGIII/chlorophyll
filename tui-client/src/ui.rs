@@ -30,7 +30,7 @@ impl Widget for &App {
         let main_area = chunks[0];
 
         let block = Block::bordered()
-            .title("tui-client")
+            .title("chlorophyll-tui")
             .title_alignment(Alignment::Center)
             .border_type(BorderType::Rounded);
 
