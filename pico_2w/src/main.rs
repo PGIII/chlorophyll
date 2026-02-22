@@ -12,11 +12,12 @@ use alloc::format;
 use chlorophyll_protocol::postcard::to_allocvec;
 use chlorophyll_protocol::temperature::{Celsius, Temperature};
 use chlorophyll_protocol::{DataReading, DataType};
-use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
+use core::cell::RefCell;
 use core::net::Ipv4Addr;
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use defmt::{self, info, println, unwrap, warn};
+use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_net::{
     IpEndpoint, StackResources,
@@ -33,7 +34,7 @@ use embassy_rp::{
 };
 use embassy_rp::{block::ImageDef, clocks::RoscRng};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::mutex::Mutex;
+use embassy_sync::blocking_mutex::Mutex;
 use embassy_time::{Delay, Duration, Timer};
 use embedded_alloc::LlffHeap as Heap;
 use embedded_graphics::geometry::Point;
@@ -50,7 +51,7 @@ use static_cell::StaticCell;
 
 use {defmt_rtt as _, panic_probe as _};
 
-type I2c1Bus = Mutex<NoopRawMutex, i2c::I2c<'static, I2C1, i2c::Async>>;
+type I2c1Bus = Mutex<NoopRawMutex, RefCell<i2c::I2c<'static, I2C1, i2c::Blocking>>>;
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
 
@@ -101,8 +102,12 @@ async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'sta
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     // Init allocator
-    unsafe {
-        embedded_alloc::init!(HEAP, 1024);
+    {
+        use core::mem::MaybeUninit;
+        use core::ptr::addr_of_mut;
+        const HEAP_SIZE: usize = 1024;
+        static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
+        unsafe { HEAP.init(addr_of_mut!(HEAP_MEM) as usize, HEAP_SIZE) }
     }
 
     let p = embassy_rp::init(Default::default());
@@ -205,12 +210,12 @@ async fn main(spawner: Spawner) {
     info!("set up i2c ");
     let sda = p.PIN_14;
     let scl = p.PIN_15;
-    let i2c = i2c::I2c::new_async(p.I2C1, scl, sda, Irqs, i2c::Config::default());
-    // static I2C_BUS: StaticCell<I2c1Bus> = StaticCell::new();
-    // let i2c_bus = I2C_BUS.init(Mutex::new(i2c));
-    // let i2c_device = I2cDevice::new(i2c_bus);
+    let i2c = i2c::I2c::new_blocking(p.I2C1, scl, sda, i2c::Config::default());
+    static I2C_BUS: StaticCell<I2c1Bus> = StaticCell::new();
+    let i2c_bus = I2C_BUS.init(Mutex::new(RefCell::new(i2c)));
+    let i2c_device = I2cDevice::new(i2c_bus);
     let timer = &mut Delay;
-    let mut aht20_uninit = aht20_driver::AHT20::new(i2c, aht20_driver::SENSOR_ADDRESS);
+    let mut aht20_uninit = aht20_driver::AHT20::new(i2c_device, aht20_driver::SENSOR_ADDRESS);
     let mut aht20 = aht20_uninit.init(timer).unwrap();
 
     let delay = Duration::from_millis(5000);
