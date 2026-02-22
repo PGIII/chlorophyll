@@ -33,8 +33,9 @@ use embassy_rp::{
     i2c::{self, InterruptHandler as I2CInterruptHandler},
 };
 use embassy_rp::{block::ImageDef, clocks::RoscRng};
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_sync::channel::{Channel, Receiver, Sender};
 use embassy_time::{Delay, Duration, Timer};
 use embedded_alloc::LlffHeap as Heap;
 use embedded_graphics::geometry::Point;
@@ -44,14 +45,23 @@ use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
 use embedded_hal_bus::spi::ExclusiveDevice;
-use rand::RngCore;
 use ssd1680::driver::Ssd1680;
 use ssd1680::graphics::{Display, Display2in13, DisplayRotation};
 use static_cell::StaticCell;
 
 use {defmt_rtt as _, panic_probe as _};
 
+// Type defs
 type I2c1Bus = Mutex<NoopRawMutex, RefCell<i2c::I2c<'static, I2C1, i2c::Blocking>>>;
+
+const SENSOR_DATA_CHANNEL_DEPTH: usize = 32;
+type SensorDataChannel = Channel<CriticalSectionRawMutex, DataType, SENSOR_DATA_CHANNEL_DEPTH>;
+type SensorDataReceiver =
+    Receiver<'static, CriticalSectionRawMutex, DataType, SENSOR_DATA_CHANNEL_DEPTH>;
+type SensorDataSender =
+    Sender<'static, CriticalSectionRawMutex, DataType, SENSOR_DATA_CHANNEL_DEPTH>;
+
+// Static vars
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
 
@@ -82,6 +92,9 @@ bind_interrupts!(struct Irqs {
     I2C1_IRQ => I2CInterruptHandler<I2C1>;
 });
 
+static SENSOR_DATA_CHANNEL: SensorDataChannel = Channel::new();
+
+// Funcs
 #[embassy_executor::task]
 async fn cyw43_task(
     runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
@@ -94,10 +107,22 @@ async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'sta
     runner.run().await
 }
 
-// #[embassy_executor::task]
-// async fn temp_sensor_task() -> ! {
-// }
-//
+/// Handles all sensors that read from the i2c1 shared bus
+#[embassy_executor::task]
+async fn i2c1_sensor_task(i2c_bus: &'static I2c1Bus, tx: SensorDataSender) {
+    info!("Init I2c Shared bus");
+    let i2c_device = I2cDevice::new(i2c_bus);
+    let timer = &mut Delay;
+    let mut aht20_uninit = aht20_driver::AHT20::new(i2c_device, aht20_driver::SENSOR_ADDRESS);
+    let mut aht20 = aht20_uninit.init(timer).unwrap();
+    loop {
+        let measure = aht20.measure(timer).unwrap();
+        let temp = Celsius::new(measure.temperature);
+        tx.send(DataType::Temperature(temp)).await;
+        let delay = Duration::from_millis(100);
+        Timer::after(delay).await;
+    }
+}
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -139,7 +164,7 @@ async fn main(spawner: Spawner) {
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
     let state = STATE.init(cyw43::State::new());
     let (net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
-    defmt::unwrap!(spawner.spawn(cyw43_task(runner)));
+    unwrap!(spawner.spawn(cyw43_task(runner)));
 
     control.init(clm).await;
     control
@@ -207,19 +232,16 @@ async fn main(spawner: Spawner) {
         .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
         .unwrap();
 
-    info!("set up i2c ");
+    info!("Init I2c Shared bus");
     let sda = p.PIN_14;
     let scl = p.PIN_15;
     let i2c = i2c::I2c::new_blocking(p.I2C1, scl, sda, i2c::Config::default());
     static I2C_BUS: StaticCell<I2c1Bus> = StaticCell::new();
     let i2c_bus = I2C_BUS.init(Mutex::new(RefCell::new(i2c)));
-    let i2c_device = I2cDevice::new(i2c_bus);
-    let timer = &mut Delay;
-    let mut aht20_uninit = aht20_driver::AHT20::new(i2c_device, aht20_driver::SENSOR_ADDRESS);
-    let mut aht20 = aht20_uninit.init(timer).unwrap();
+
+    unwrap!(spawner.spawn(i2c1_sensor_task(i2c_bus, SENSOR_DATA_CHANNEL.sender())));
 
     let delay = Duration::from_millis(5000);
-
     let mut rx_buffer = [0; 4096];
     let mut tx_buffer = [0; 4096];
 
@@ -237,17 +259,15 @@ async fn main(spawner: Spawner) {
         &mut tx_buffer,
     );
     socket.bind(5000).unwrap();
+
+    let receiver = SENSOR_DATA_CHANNEL.receiver();
+    let timer = &mut Delay;
     loop {
         control.gpio_set(0, true).await;
-        Timer::after(delay).await;
-        let measure = aht20.measure(timer).unwrap();
-        let temp = Celsius::new(measure.temperature);
-        msg = format!("{:.2}F {:.2}%", temp.get_as_f(), measure.humidity);
-        let reading = DataReading::new(DataType::Temperature(temp.into()));
+        msg = format!("FIXME");
         display_bw
             .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
             .unwrap();
-        let serialized = to_allocvec(&reading).unwrap();
         Text::new(
             &msg,
             Point::new(5, 10),
@@ -259,6 +279,8 @@ async fn main(spawner: Spawner) {
         ssd1680.display_frame(timer).unwrap();
         control.gpio_set(0, false).await;
 
+        let reading = receiver.receive().await;
+        let serialized = to_allocvec(&reading).unwrap();
         info!("Writing to socket");
         match socket.send_to(&serialized, endpoint).await {
             Ok(()) => {}
