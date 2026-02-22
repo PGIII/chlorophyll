@@ -5,6 +5,7 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style, Stylize},
+    symbols::Marker,
     text::Line,
     widgets::{Axis, Block, BorderType, Chart, Dataset, GraphType, Widget},
 };
@@ -39,34 +40,50 @@ impl Widget for &App {
             .name("Temperature (°C)")
             .style(Style::default().fg(Color::Yellow))
             .graph_type(GraphType::Line)
+            .marker(Marker::Braille)
             .data(&temperatures);
 
-        let y_min = temperatures.iter().map(|(_, y)| *y).fold(0.0, f64::min);
-        let y_max = temperatures.iter().map(|(_, y)| *y).fold(100.0, f64::max);
-        let y_bounds = if (y_max - y_min) < 10.0 {
-            [y_min - 5.0, y_max + 5.0]
+        let y_min = temperatures
+            .iter()
+            .map(|(_, y)| *y)
+            .fold(f64::INFINITY, f64::min);
+        let y_max = temperatures
+            .iter()
+            .map(|(_, y)| *y)
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        let (y_min, y_max) = if temperatures.is_empty() {
+            (0.0, 100.0)
+        } else if (y_max - y_min).abs() < 1.0 {
+            (y_min - 5.0, y_max + 5.0)
         } else {
-            [y_min, y_max]
+            let padding = (y_max - y_min) * 0.1;
+            (y_min - padding, y_max + padding)
         };
 
-        let x_max = temperatures.len().max(1) as f64;
-        let x_label = if let Some(first) = self.last_reading.first() {
-            let start = first.timestamp.with_timezone(&Local).format("%H:%M:%S");
+        let x_max = (temperatures.len().max(1) - 1).max(1) as f64;
+
+        let x_labels: Vec<Line> = if let Some(first) = self.last_reading.first() {
+            let start = first
+                .timestamp
+                .with_timezone(&Local)
+                .format("%H:%M:%S")
+                .to_string();
             if let Some(last) = self.last_reading.last() {
-                let end = last.timestamp.with_timezone(&Local).format("%H:%M:%S");
-                Line::from(vec![
-                    start.to_string().bold(),
-                    " → ".into(),
-                    end.to_string().bold(),
-                ])
+                let end = last
+                    .timestamp
+                    .with_timezone(&Local)
+                    .format("%H:%M:%S")
+                    .to_string();
+                vec![start.bold().into(), end.bold().into()]
             } else {
-                Line::from(start.to_string())
+                vec![start.into()]
             }
         } else {
-            Line::from("No data")
+            vec!["No data".into()]
         };
 
-        let y_label = format!("{:.1} - {:.1} °C", y_bounds[0], y_bounds[1]);
+        let y_mid = (y_min + y_max) / 2.0;
 
         let chart = Chart::new(vec![dataset])
             .block(
@@ -76,15 +93,21 @@ impl Widget for &App {
             )
             .x_axis(
                 Axis::default()
+                    .title("Time")
                     .style(Style::default().fg(Color::Gray))
                     .bounds([0.0, x_max])
-                    .labels([x_label]),
+                    .labels(x_labels),
             )
             .y_axis(
                 Axis::default()
+                    .title("°C")
                     .style(Style::default().fg(Color::Gray))
-                    .bounds(y_bounds)
-                    .labels(["0".into(), y_label, format!("{:.0}", y_bounds[1])]),
+                    .bounds([y_min, y_max])
+                    .labels(vec![
+                        Line::from(format!("{:.1}", y_min)),
+                        Line::from(format!("{:.1}", y_mid)),
+                        Line::from(format!("{:.1}", y_max)),
+                    ]),
             );
 
         chart.render(main_area, buf);
