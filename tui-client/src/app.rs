@@ -9,6 +9,8 @@ use ratatui::DefaultTerminal;
 use tokio::net::UdpSocket;
 use tracing::*;
 
+const MAX_READINGS: usize = 500;
+
 /// Application.
 #[derive(Debug)]
 pub struct App {
@@ -136,6 +138,9 @@ impl App {
                     Ok(reading) => {
                         info!("Got msg from {}", src);
                         let entry = DataEntry::new(reading, Utc::now());
+                        if self.last_reading.len() >= MAX_READINGS {
+                            self.last_reading.remove(0);
+                        }
                         self.last_reading.push(entry);
                     }
                     Err(e) => {

@@ -3,21 +3,16 @@ use std::rc::Rc;
 use chrono::Local;
 use ratatui::{
     buffer::Buffer,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Stylize},
-    widgets::{Block, BorderType, Paragraph, Widget},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Style, Stylize},
+    text::Line,
+    widgets::{Axis, Block, BorderType, Chart, Dataset, GraphType, Widget},
 };
 
 use crate::app::App;
 use crate::log_widget::LogListWidget;
 
 impl Widget for &App {
-    /// Renders the user interface widgets.
-    ///
-    // This is where you add new widgets.
-    // See the following resources:
-    // - https://docs.rs/ratatui/latest/ratatui/widgets/index.html
-    // - https://github.com/ratatui/ratatui/tree/master/examples
     fn render(self, area: Rect, buf: &mut Buffer) {
         let chunks = if self.log_state.enabled {
             Layout::default()
@@ -30,38 +25,69 @@ impl Widget for &App {
 
         let main_area = chunks[0];
 
-        let block = Block::bordered()
-            .title("chlorophyll-tui")
-            .title_alignment(Alignment::Center)
-            .border_type(BorderType::Rounded);
+        let temperatures: Vec<(f64, f64)> = self
+            .last_reading
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let chlorophyll_protocol::DataType::Temperature(t) = &entry.reading.value;
+                (i as f64, *t as f64)
+            })
+            .collect();
 
-        let last_msg = if let Some(last_msg) = self.last_reading.last() {
-            let time = last_msg
-                .timestamp
-                .with_timezone(&Local)
-                .format("[%H:%M:%S]");
-            format!("{time} {:?}", last_msg.reading, )
+        let dataset = Dataset::default()
+            .name("Temperature (°C)")
+            .style(Style::default().fg(Color::Yellow))
+            .graph_type(GraphType::Line)
+            .data(&temperatures);
+
+        let y_min = temperatures.iter().map(|(_, y)| *y).fold(0.0, f64::min);
+        let y_max = temperatures.iter().map(|(_, y)| *y).fold(100.0, f64::max);
+        let y_bounds = if (y_max - y_min) < 10.0 {
+            [y_min - 5.0, y_max + 5.0]
         } else {
-            String::from("")
+            [y_min, y_max]
         };
 
-        let text = format!(
-            "This is a tui template.\n\
-                Press `Esc`, `Ctrl-C` or `q` to stop running.\n\
-                Press left and right to increment and decrement the counter respectively.\n\
-                Counter: {}
-                Last Message: '{}'\n\
-                Press Shift+L to toggle log panel, Up/Down to scroll, PgUp/PgDn for fast scroll",
-            self.counter, last_msg
-        );
+        let x_max = temperatures.len().max(1) as f64;
+        let x_label = if let Some(first) = self.last_reading.first() {
+            let start = first.timestamp.with_timezone(&Local).format("%H:%M:%S");
+            if let Some(last) = self.last_reading.last() {
+                let end = last.timestamp.with_timezone(&Local).format("%H:%M:%S");
+                Line::from(vec![
+                    start.to_string().bold(),
+                    " → ".into(),
+                    end.to_string().bold(),
+                ])
+            } else {
+                Line::from(start.to_string())
+            }
+        } else {
+            Line::from("No data")
+        };
 
-        let paragraph = Paragraph::new(text)
-            .block(block)
-            .fg(Color::Cyan)
-            .bg(Color::Black)
-            .centered();
+        let y_label = format!("{:.1} - {:.1} °C", y_bounds[0], y_bounds[1]);
 
-        paragraph.render(main_area, buf);
+        let chart = Chart::new(vec![dataset])
+            .block(
+                Block::bordered()
+                    .title("Temperature")
+                    .border_type(BorderType::Rounded),
+            )
+            .x_axis(
+                Axis::default()
+                    .style(Style::default().fg(Color::Gray))
+                    .bounds([0.0, x_max])
+                    .labels([x_label]),
+            )
+            .y_axis(
+                Axis::default()
+                    .style(Style::default().fg(Color::Gray))
+                    .bounds(y_bounds)
+                    .labels(["0".into(), y_label, format!("{:.0}", y_bounds[1])]),
+            );
+
+        chart.render(main_area, buf);
 
         if self.log_state.enabled && chunks.len() > 1 {
             let log_area = chunks[1];
