@@ -12,6 +12,7 @@ use alloc::format;
 use chlorophyll_protocol::postcard::to_allocvec;
 use chlorophyll_protocol::temperature::{Celsius, Temperature};
 use chlorophyll_protocol::{DataReading, DataType};
+use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use core::net::Ipv4Addr;
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
@@ -31,6 +32,8 @@ use embassy_rp::{
     i2c::{self, InterruptHandler as I2CInterruptHandler},
 };
 use embassy_rp::{block::ImageDef, clocks::RoscRng};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::mutex::Mutex;
 use embassy_time::{Delay, Duration, Timer};
 use embedded_alloc::LlffHeap as Heap;
 use embedded_graphics::geometry::Point;
@@ -47,6 +50,7 @@ use static_cell::StaticCell;
 
 use {defmt_rtt as _, panic_probe as _};
 
+type I2c1Bus = Mutex<NoopRawMutex, i2c::I2c<'static, I2C1, i2c::Async>>;
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
 
@@ -88,6 +92,11 @@ async fn cyw43_task(
 async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'static>>) -> ! {
     runner.run().await
 }
+
+// #[embassy_executor::task]
+// async fn temp_sensor_task() -> ! {
+// }
+//
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -197,6 +206,9 @@ async fn main(spawner: Spawner) {
     let sda = p.PIN_14;
     let scl = p.PIN_15;
     let i2c = i2c::I2c::new_async(p.I2C1, scl, sda, Irqs, i2c::Config::default());
+    // static I2C_BUS: StaticCell<I2c1Bus> = StaticCell::new();
+    // let i2c_bus = I2C_BUS.init(Mutex::new(i2c));
+    // let i2c_device = I2cDevice::new(i2c_bus);
     let timer = &mut Delay;
     let mut aht20_uninit = aht20_driver::AHT20::new(i2c, aht20_driver::SENSOR_ADDRESS);
     let mut aht20 = aht20_uninit.init(timer).unwrap();
