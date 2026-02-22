@@ -226,7 +226,7 @@ async fn main(spawner: Spawner) {
         let measure = aht20.measure(timer).unwrap();
         let temp = Celsius::new(measure.temperature);
         msg = format!("{:.2}F {:.2}%", temp.get_as_f(), measure.humidity);
-        let reading = DataReading::new(DataType::Temperature(temp.get_as_f()));
+        let reading = DataReading::new(DataType::Temperature(temp.into()));
         display_bw
             .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
             .unwrap();

@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use chlorophyll_protocol::temperature::Temperature;
 use chrono::Local;
 use ratatui::{
     buffer::Buffer,
@@ -12,6 +13,9 @@ use ratatui::{
 
 use crate::app::App;
 use crate::log_widget::LogListWidget;
+
+/// Maximum number of samples to display in the chart window
+const CHART_WINDOW_SIZE: usize = 1000;
 
 impl Widget for &App {
     fn render(self, area: Rect, buf: &mut Buffer) {
@@ -26,18 +30,21 @@ impl Widget for &App {
 
         let main_area = chunks[0];
 
-        let temperatures: Vec<(f64, f64)> = self
-            .last_reading
+        // Take only the latest CHART_WINDOW_SIZE readings
+        let window_start = self.last_reading.len().saturating_sub(CHART_WINDOW_SIZE);
+        let window = &self.last_reading[window_start..];
+
+        let temperatures: Vec<(f64, f64)> = window
             .iter()
             .enumerate()
             .map(|(i, entry)| {
                 let chlorophyll_protocol::DataType::Temperature(t) = &entry.reading.value;
-                (i as f64, *t as f64)
+                (i as f64, t.get_as_f() as f64)
             })
             .collect();
 
         let dataset = Dataset::default()
-            .name("Temperature (°C)")
+            .name("Temperature (°F)")
             .style(Style::default().fg(Color::Yellow))
             .graph_type(GraphType::Line)
             .marker(Marker::Braille)
@@ -53,7 +60,7 @@ impl Widget for &App {
             .fold(f64::NEG_INFINITY, f64::max);
 
         let (y_min, y_max) = if temperatures.is_empty() {
-            (0.0, 100.0)
+            (32.0, 212.0)
         } else if (y_max - y_min).abs() < 1.0 {
             (y_min - 5.0, y_max + 5.0)
         } else {
@@ -61,15 +68,16 @@ impl Widget for &App {
             (y_min - padding, y_max + padding)
         };
 
-        let x_max = (temperatures.len().max(1) - 1).max(1) as f64;
+        // X bounds always 0..window length so latest data is at the right edge
+        let x_max = (window.len().max(1) - 1).max(1) as f64;
 
-        let x_labels: Vec<Line> = if let Some(first) = self.last_reading.first() {
+        let x_labels: Vec<Line> = if let Some(first) = window.first() {
             let start = first
                 .timestamp
                 .with_timezone(&Local)
                 .format("%H:%M:%S")
                 .to_string();
-            if let Some(last) = self.last_reading.last() {
+            if let Some(last) = window.last() {
                 let end = last
                     .timestamp
                     .with_timezone(&Local)
@@ -100,7 +108,7 @@ impl Widget for &App {
             )
             .y_axis(
                 Axis::default()
-                    .title("°C")
+                    .title("°F")
                     .style(Style::default().fg(Color::Gray))
                     .bounds([y_min, y_max])
                     .labels(vec![

@@ -2,12 +2,13 @@
 
 pub mod temperature;
 
+use crate::temperature::Celsius;
 pub use postcard;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub enum DataType {
-    Temperature(f32),
+    Temperature(Celsius),
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]

@@ -2,10 +2,14 @@
 
 use core::fmt::Display;
 
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, PartialEq, PartialOrd, Debug, Deserialize, Serialize)]
 pub struct Celsius {
     value: f32,
 }
 
+#[derive(Clone, PartialEq, PartialOrd, Debug, Deserialize, Serialize)]
 struct Farenheit {
     value: f32,
 }
