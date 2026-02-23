@@ -12,7 +12,6 @@ use alloc::format;
 use chlorophyll_protocol::postcard::to_allocvec;
 use chlorophyll_protocol::temperature::{Celsius, Temperature};
 use chlorophyll_protocol::{DataReading, DataType};
-use embassy_futures::yield_now;
 use core::cell::RefCell;
 use core::net::{IpAddr, Ipv4Addr};
 use cyw43::JoinOptions;
@@ -20,6 +19,7 @@ use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use defmt::{self, info, println, unwrap, warn};
 use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
 use embassy_executor::Spawner;
+use embassy_futures::yield_now;
 use embassy_net::{IpAddress, Stack};
 use embassy_net::{
     IpEndpoint, StackResources,
@@ -119,10 +119,9 @@ async fn i2c1_sensor_task(i2c_bus: &'static I2c1Bus, tx: SensorDataSender) {
     let mut aht20 = aht20_uninit.init(timer).unwrap();
     loop {
         let measure = aht20.measure(timer).unwrap();
-        info!("Got {}", measure.temperature);
         let temp = Celsius::new(measure.temperature);
         tx.send(DataType::Temperature(temp)).await;
-        let delay = Duration::from_millis(1000);
+        let delay = Duration::from_millis(100);
         Timer::after(delay).await;
     }
 }
@@ -135,6 +134,14 @@ async fn broadcast_readings(
     port: u16,
 ) {
     info!("Setting up Socket");
+    while !stack.is_config_up() {
+        Timer::after_millis(100).await;
+    }
+    info!("DHCP is now up!");
+
+    stack
+        .join_multicast_group(ip)
+        .expect("Unable to join multicast group");
 
     let mut rx_buffer = [0; 4096];
     let mut tx_buffer = [0; 4096];
@@ -154,7 +161,6 @@ async fn broadcast_readings(
     loop {
         let reading = rx.receive().await;
         let serialized = to_allocvec(&reading).unwrap();
-        info!("Writing to socket");
         match socket.send_to(&serialized, endpoint).await {
             Ok(()) => {}
             Err(e) => {
@@ -162,8 +168,6 @@ async fn broadcast_readings(
                 break;
             }
         };
-        let delay = Duration::from_millis(1000);
-        Timer::after(delay).await;
     }
 }
 
@@ -244,16 +248,8 @@ async fn main(spawner: Spawner) {
 
     // Wait for DHCP, not necessary when using static IP
     info!("waiting for DHCP...");
-    while !stack.is_config_up() {
-        Timer::after_millis(100).await;
-    }
-    info!("DHCP is now up!");
-
     let multicast_addr = Ipv4Addr::new(239, 0, 0, 1);
 
-    stack
-        .join_multicast_group(multicast_addr)
-        .expect("Unable to join multicast group");
     unwrap!(spawner.spawn(broadcast_readings(
         stack,
         SENSOR_DATA_CHANNEL.receiver(),
@@ -295,51 +291,6 @@ async fn main(spawner: Spawner) {
 
     unwrap!(spawner.spawn(i2c1_sensor_task(i2c_bus, SENSOR_DATA_CHANNEL.sender())));
 
-    // info!("Setting up Socket");
-    //
-    // let mut rx_buffer = [0; 4096];
-    // let mut tx_buffer = [0; 4096];
-    // let mut rx_meta = [PacketMetadata::EMPTY; 4096];
-    // let mut tx_meta = [PacketMetadata::EMPTY; 4096];
-    //
-    // // Wait for DHCP, not necessary when using static IP
-    // while !stack.is_config_up() {
-    //     Timer::after_millis(100).await;
-    //     info!("waiting for DHCP...");
-    // }
-    // info!("DHCP is now up!");
-
-    // let ip: IpAddress = multicast_addr.into();
-    // let rx = SENSOR_DATA_CHANNEL.receiver();
-    // let port = 5000;
-    // stack
-    //     .join_multicast_group(ip)
-    //     .expect("Unable to join multicast group");
-    //
-    // let mut socket = UdpSocket::new(
-    //     stack,
-    //     &mut rx_meta,
-    //     &mut rx_buffer,
-    //     &mut tx_meta,
-    //     &mut tx_buffer,
-    // );
-    // //FIXME: Just retry if this fails
-    // socket.bind(5000).expect("Error binding to socket");
-    // let endpoint = IpEndpoint::new(ip.into(), port);
-    // loop {
-    //     let reading = rx.receive().await;
-    //     let serialized = to_allocvec(&reading).unwrap();
-    //     info!("Writing to socket");
-    //     match socket.send_to(&serialized, endpoint).await {
-    //         Ok(()) => {}
-    //         Err(e) => {
-    //             warn!("write error: {:?}", e);
-    //             break;
-    //         }
-    //     };
-    //     let delay = Duration::from_millis(1000);
-    //     Timer::after(delay).await;
-    // }
     loop {
         yield_now().await;
     }
