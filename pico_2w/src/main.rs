@@ -291,8 +291,13 @@ async fn main(spawner: Spawner) {
 
     unwrap!(spawner.spawn(i2c1_sensor_task(i2c_bus, SENSOR_DATA_CHANNEL.sender())));
 
+    // All that's left to do is blink the LED
+    let mut led_on = false;
     loop {
-        yield_now().await;
+        control.gpio_set(0, led_on).await;
+        led_on = !led_on;
+        let delay = Duration::from_millis(1000);
+        Timer::after(delay).await;
     }
 
     // let delay = Duration::from_millis(5000);
