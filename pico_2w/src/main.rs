@@ -12,6 +12,7 @@ use alloc::format;
 use chlorophyll_protocol::postcard::to_allocvec;
 use chlorophyll_protocol::temperature::{Celsius, Temperature};
 use chlorophyll_protocol::{DataReading, DataType};
+use embassy_futures::yield_now;
 use core::cell::RefCell;
 use core::net::{IpAddr, Ipv4Addr};
 use cyw43::JoinOptions;
@@ -140,17 +141,6 @@ async fn broadcast_readings(
     let mut rx_meta = [PacketMetadata::EMPTY; 4096];
     let mut tx_meta = [PacketMetadata::EMPTY; 4096];
 
-    // Wait for DHCP, not necessary when using static IP
-    info!("waiting for DHCP...");
-    while !stack.is_config_up() {
-        Timer::after_millis(100).await;
-    }
-    info!("DHCP is now up!");
-
-    stack
-        .join_multicast_group(ip)
-        .expect("Unable to join multicast group");
-
     let mut socket = UdpSocket::new(
         stack,
         &mut rx_meta,
@@ -252,7 +242,18 @@ async fn main(spawner: Spawner) {
         }
     }
 
+    // Wait for DHCP, not necessary when using static IP
+    info!("waiting for DHCP...");
+    while !stack.is_config_up() {
+        Timer::after_millis(100).await;
+    }
+    info!("DHCP is now up!");
+
     let multicast_addr = Ipv4Addr::new(239, 0, 0, 1);
+
+    stack
+        .join_multicast_group(multicast_addr)
+        .expect("Unable to join multicast group");
     unwrap!(spawner.spawn(broadcast_readings(
         stack,
         SENSOR_DATA_CHANNEL.receiver(),
@@ -339,7 +340,9 @@ async fn main(spawner: Spawner) {
     //     let delay = Duration::from_millis(1000);
     //     Timer::after(delay).await;
     // }
-    loop {}
+    loop {
+        yield_now().await;
+    }
 
     // let delay = Duration::from_millis(5000);
     // let mut msg;
