@@ -121,7 +121,13 @@ impl Widget for &LogListWidget<'_> {
         let visible_height = inner_area.height as usize;
 
         let max_scroll = total_logs.saturating_sub(visible_height);
-        let scroll = std::cmp::min(self.scroll_offset as usize, max_scroll);
+        // If scroll is 0 (default), auto-scroll to show latest logs
+        // If scroll > 0, use the user's scroll position
+        let scroll = if self.scroll_offset == 0 {
+            max_scroll
+        } else {
+            std::cmp::min(self.scroll_offset as usize, max_scroll)
+        };
 
         let items: Vec<ListItem> = self
             .logs

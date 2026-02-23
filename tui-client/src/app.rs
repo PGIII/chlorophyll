@@ -136,8 +136,9 @@ impl App {
             match sock.try_recv_from(&mut buf) {
                 Ok((len, src)) => match from_bytes(&buf[..len]) {
                     Ok(reading) => {
-                        info!("Got msg from {}", src);
-                        let entry = DataEntry::new(reading, Utc::now());
+                        let now = Utc::now();
+                        info!("[{}] Got msg from {}", now.format("%H:%M:%S%.3f"), src);
+                        let entry = DataEntry::new(reading, now);
                         if self.last_reading.len() >= MAX_READINGS {
                             self.last_reading.remove(0);
                         }
