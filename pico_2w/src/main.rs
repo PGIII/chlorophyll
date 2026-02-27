@@ -25,7 +25,7 @@ use embassy_net::{
     udp::{PacketMetadata, UdpSocket},
 };
 use embassy_rp::gpio::{Input, Level, Output};
-use embassy_rp::peripherals::{DMA_CH0, I2C1, PIO0};
+use embassy_rp::peripherals::{DMA_CH0, I2C1, PIO0, SPI0};
 use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_rp::spi;
 use embassy_rp::spi::{Blocking, Spi};
@@ -61,6 +61,10 @@ type SensorDataReceiver =
     Receiver<'static, CriticalSectionRawMutex, DataType, SENSOR_DATA_CHANNEL_DEPTH>;
 type SensorDataSender =
     Sender<'static, CriticalSectionRawMutex, DataType, SENSOR_DATA_CHANNEL_DEPTH>;
+type DisplaySpiDevice = ExclusiveDevice<Spi<'static, SPI0, Blocking>, Output<'static>, Delay>;
+
+use embedded_hal_1::digital::{InputPin, OutputPin};
+use embedded_hal_1::spi::SpiDevice as SpiDeviceTrait;
 
 // Static vars
 #[global_allocator]
@@ -179,6 +183,57 @@ async fn broadcast_readings(
     }
 }
 
+async fn run_display<SPI, DC, BSY, RST>(
+    spi_device: SPI,
+    dc: DC,
+    busy: BSY,
+    rst: RST,
+) where
+    SPI: SpiDeviceTrait,
+    DC: OutputPin,
+    BSY: InputPin,
+    RST: OutputPin,
+{
+    let disp_interface = display_interface_spi::SPIInterface::new(spi_device, dc);
+    let mut delay = Delay;
+    let mut ssd1680 = Ssd1680::new(disp_interface, busy, rst, &mut delay).unwrap();
+    ssd1680.clear_bw_frame().unwrap();
+    let mut display_bw = Display2in13::bw();
+    display_bw.set_rotation(DisplayRotation::Rotate270);
+    display_bw
+        .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
+        .unwrap();
+
+    let delay_duration = Duration::from_millis(5000);
+    loop {
+        let msg = format!("FIXME");
+        display_bw
+            .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
+            .unwrap();
+        Text::new(
+            &msg,
+            Point::new(5, 10),
+            MonoTextStyle::new(&FONT_9X15_BOLD, BinaryColor::Off),
+        )
+        .draw(&mut display_bw)
+        .unwrap();
+        ssd1680.update_bw_frame(display_bw.buffer()).unwrap();
+        ssd1680.display_frame(&mut Delay).unwrap();
+        Timer::after(delay_duration).await;
+    }
+}
+
+/// Concrete Embassy task — thin wrapper over `run_display`.
+#[embassy_executor::task]
+async fn display_task(
+    spi_device: DisplaySpiDevice,
+    dc: Output<'static>,
+    busy: Input<'static>,
+    rst: Output<'static>,
+) {
+    run_display(spi_device, dc, busy, rst).await;
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     // Init allocator
@@ -266,29 +321,16 @@ async fn main(spawner: Spawner) {
     )));
 
     info!("Building display");
-    let spi = p.SPI0;
-    let rst = Output::new(p.PIN_0, Level::Low);
-    let dc = Output::new(p.PIN_4, Level::Low);
-    let busy = Input::new(p.PIN_1, embassy_rp::gpio::Pull::Up);
-    let sclk = p.PIN_2;
-    let mosi = p.PIN_3;
-    let cs = Output::new(p.PIN_5, Level::High);
-
-    let spi: Spi<'_, _, Blocking> =
-        Spi::new_blocking_txonly(spi, sclk, mosi, spi::Config::default());
-
-    let spi_device = ExclusiveDevice::new(spi, cs, Delay);
-    let disp_interface = display_interface_spi::SPIInterface::new(spi_device, dc);
-    let mut delay = Delay;
-    let mut ssd1680 = Ssd1680::new(disp_interface, busy, rst, &mut delay).unwrap();
-    ssd1680.clear_bw_frame().unwrap();
-    let mut display_bw = Display2in13::bw();
-    display_bw.set_rotation(DisplayRotation::Rotate270);
-    println!("drawing display");
-    // background fill
-    display_bw
-        .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
-        .unwrap();
+    let disp_spi: Spi<'_, _, Blocking> =
+        Spi::new_blocking_txonly(p.SPI0, p.PIN_2, p.PIN_3, spi::Config::default());
+    let disp_cs = Output::new(p.PIN_5, Level::High);
+    let disp_spi_device = ExclusiveDevice::new(disp_spi, disp_cs, Delay);
+    unwrap!(spawner.spawn(display_task(
+        disp_spi_device,
+        Output::new(p.PIN_4, Level::Low),  // dc
+        Input::new(p.PIN_1, embassy_rp::gpio::Pull::Up),  // busy
+        Output::new(p.PIN_0, Level::Low),  // rst
+    )));
 
     info!("Init I2c Shared bus");
     let sda = p.PIN_14;
@@ -299,34 +341,11 @@ async fn main(spawner: Spawner) {
 
     unwrap!(spawner.spawn(i2c1_sensor_task(i2c_bus, SENSOR_DATA_CHANNEL.sender())));
 
-    // All that's left to do is blink the LED
+    // Blink LED
     let mut led_on = false;
     loop {
         control.gpio_set(0, led_on).await;
         led_on = !led_on;
-        let delay = Duration::from_millis(1000);
-        Timer::after(delay).await;
+        Timer::after(Duration::from_millis(1000)).await;
     }
-
-    // let delay = Duration::from_millis(5000);
-    // let mut msg;
-    // let timer = &mut Delay;
-    // loop {
-    //     control.gpio_set(0, true).await;
-    //     msg = format!("FIXME");
-    //     display_bw
-    //         .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
-    //         .unwrap();
-    //     Text::new(
-    //         &msg,
-    //         Point::new(5, 10),
-    //         MonoTextStyle::new(&FONT_9X15_BOLD, BinaryColor::Off),
-    //     )
-    //     .draw(&mut display_bw)
-    //     .unwrap();
-    //     ssd1680.update_bw_frame(display_bw.buffer()).unwrap();
-    //     ssd1680.display_frame(timer).unwrap();
-    //     control.gpio_set(0, false).await;
-    //     Timer::after(delay).await;
-    // }
 }
