@@ -38,7 +38,7 @@ impl Widget for &App {
             .iter()
             .enumerate()
             .map(|(i, entry)| {
-                let chlorophyll_protocol::DataType::Temperature(t) = &entry.reading.value;
+                let chlorophyll_protocol::DataType::Temperature(t) = &entry.data_type;
                 (i as f64, t.get_as_f() as f64)
             })
             .collect();

@@ -2,7 +2,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 
 use crate::event::{AppEvent, Event, EventHandler};
 use crate::log_widget::LogState;
-use chlorophyll_protocol::{DataReading, postcard::from_bytes};
+use chlorophyll_protocol::{DataType, Packet, PacketCommand, postcard::from_bytes};
 use chrono::{DateTime, Utc};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
@@ -29,14 +29,9 @@ pub struct App {
 
 #[derive(Debug)]
 pub struct DataEntry {
-    pub reading: DataReading,
+    pub data_type: DataType,
+    pub sensor_id: u128,
     pub timestamp: DateTime<Utc>,
-}
-
-impl DataEntry {
-    pub fn new(reading: DataReading, timestamp: DateTime<Utc>) -> Self {
-        Self { reading, timestamp }
-    }
 }
 
 impl Default for App {
@@ -96,6 +91,9 @@ impl App {
             KeyCode::Char('c' | 'C') if key_event.modifiers == KeyModifiers::CONTROL => {
                 self.events.send(AppEvent::Quit)
             }
+            KeyCode::Char('r' | 'R') if key_event.modifiers == KeyModifiers::CONTROL => {
+                self.last_reading.clear();
+            }
             KeyCode::Char('L') if key_event.modifiers == KeyModifiers::SHIFT => {
                 self.log_state.toggle();
             }
@@ -134,11 +132,12 @@ impl App {
         if let Some(sock) = &self.socket {
             let mut buf = [0u8; 1500];
             match sock.try_recv_from(&mut buf) {
-                Ok((len, src)) => match from_bytes(&buf[..len]) {
-                    Ok(reading) => {
+                Ok((len, src)) => match from_bytes::<Packet>(&buf[..len]) {
+                    Ok(packet) => {
                         let now = Utc::now();
-                        info!("[{}] Got msg from {}", now.format("%H:%M:%S%.3f"), src);
-                        let entry = DataEntry::new(reading, now);
+                        info!("[{}] Got msg from {} (id={:x})", now.format("%H:%M:%S%.3f"), src, packet.id());
+                        let PacketCommand::DataReading(data_type) = packet.command().clone();
+                        let entry = DataEntry { data_type, sensor_id: packet.id(), timestamp: now };
                         if self.last_reading.len() >= MAX_READINGS {
                             self.last_reading.remove(0);
                         }

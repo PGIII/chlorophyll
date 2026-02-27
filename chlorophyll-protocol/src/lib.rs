@@ -28,6 +28,9 @@ impl Packet {
     pub fn new(command: PacketCommand, id: SensorID) -> Self {
         Self { command, id }
     }
+
+    pub fn command(&self) -> &PacketCommand { &self.command }
+    pub fn id(&self) -> SensorID { self.id }
 }
 
 /// Builds new packets, storing common data
