@@ -63,8 +63,8 @@ type SensorDataSender =
     Sender<'static, CriticalSectionRawMutex, DataType, SENSOR_DATA_CHANNEL_DEPTH>;
 type DisplaySpiDevice = ExclusiveDevice<Spi<'static, SPI0, Blocking>, Output<'static>, Delay>;
 
-use embedded_hal_1::digital::{InputPin, OutputPin};
-use embedded_hal_1::spi::SpiDevice as SpiDeviceTrait;
+use embedded_hal::digital::{InputPin, OutputPin};
+use embedded_hal::spi::SpiDevice as SpiDeviceTrait;
 
 // Static vars
 #[global_allocator]
