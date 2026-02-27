@@ -12,12 +12,36 @@ pub enum DataType {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct DataReading {
-    pub value: DataType,
+pub enum PacketCommand {
+    DataReading(DataType),
 }
 
-impl DataReading {
-    pub fn new(data: DataType) -> Self {
-        Self { value: data }
+type SensorID = u128;
+/// Chlorophyll packet that can hold a variety of commands
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct Packet {
+    command: PacketCommand,
+    /// Unique ID to identify the sensor
+    id: SensorID, // What size do we need to serial numbers ?
+}
+impl Packet {
+    pub fn new(command: PacketCommand, id: SensorID) -> Self {
+        Self { command, id }
+    }
+}
+
+/// Builds new packets, storing common data
+#[derive(Debug, PartialEq, Clone)]
+pub struct PacketBuilder {
+    id: SensorID,
+}
+
+impl PacketBuilder {
+    pub fn new(id: SensorID) -> Self {
+        Self { id }
+    }
+
+    pub fn build(&self, command: PacketCommand) -> Packet {
+        Packet::new(command, self.id)
     }
 }

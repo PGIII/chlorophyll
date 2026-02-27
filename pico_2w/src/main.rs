@@ -10,8 +10,7 @@ mod temp_humidity_sensor;
 
 use alloc::format;
 use chlorophyll_protocol::postcard::to_allocvec;
-use chlorophyll_protocol::temperature::{Celsius, Temperature};
-use chlorophyll_protocol::{DataReading, DataType};
+use chlorophyll_protocol::*;
 use core::cell::RefCell;
 use core::net::{IpAddr, Ipv4Addr};
 use cyw43::JoinOptions;
@@ -117,13 +116,18 @@ async fn i2c1_sensor_task(i2c_bus: &'static I2c1Bus, tx: SensorDataSender) {
     let timer = &mut Delay;
     let mut aht20_uninit = aht20_driver::AHT20::new(i2c_device, aht20_driver::SENSOR_ADDRESS);
     let mut aht20 = aht20_uninit.init(timer).unwrap();
+
     loop {
         let measure = aht20.measure(timer).unwrap();
-        let temp = Celsius::new(measure.temperature);
+        let temp = temperature::Celsius::new(measure.temperature);
         tx.send(DataType::Temperature(temp)).await;
         let delay = Duration::from_millis(100);
         Timer::after(delay).await;
     }
+}
+
+fn get_unique_id() -> u128 {
+    embassy_rp::otp::get_chipid().expect("error fetching chip ID") as u128
 }
 
 #[embassy_executor::task]
@@ -158,9 +162,13 @@ async fn broadcast_readings(
     //FIXME: Just retry if this fails
     socket.bind(5000).expect("Error binding to socket");
     let endpoint = IpEndpoint::new(ip.into(), port);
+
+    // Lastly setup packet builder
+    let packet_builder = PacketBuilder::new(get_unique_id());
     loop {
         let reading = rx.receive().await;
-        let serialized = to_allocvec(&reading).unwrap();
+        let packet = packet_builder.build(PacketCommand::DataReading(reading));
+        let serialized = to_allocvec(&packet).unwrap();
         match socket.send_to(&serialized, endpoint).await {
             Ok(()) => {}
             Err(e) => {
