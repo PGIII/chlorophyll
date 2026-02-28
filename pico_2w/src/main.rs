@@ -28,7 +28,7 @@ use embassy_rp::gpio::{Input, Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, I2C1, PIO0, SPI0};
 use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_rp::spi;
-use embassy_rp::spi::{Blocking, Spi};
+use embassy_rp::spi::{Async, Spi};
 use embassy_rp::{
     bind_interrupts,
     i2c::{self, InterruptHandler as I2CInterruptHandler},
@@ -46,7 +46,7 @@ use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
 use embedded_hal_bus::spi::ExclusiveDevice;
-use ssd1680::driver::Ssd1680;
+use ssd1680::async_driver::Ssd1680Async;
 use ssd1680::graphics::{Display, Display2in13, DisplayRotation};
 use static_cell::StaticCell;
 
@@ -61,10 +61,10 @@ type SensorDataReceiver =
     Receiver<'static, CriticalSectionRawMutex, DataType, SENSOR_DATA_CHANNEL_DEPTH>;
 type SensorDataSender =
     Sender<'static, CriticalSectionRawMutex, DataType, SENSOR_DATA_CHANNEL_DEPTH>;
-type DisplaySpiDevice = ExclusiveDevice<Spi<'static, SPI0, Blocking>, Output<'static>, Delay>;
+type DisplaySpiDevice = ExclusiveDevice<Spi<'static, SPI0, Async>, Output<'static>, Delay>;
 
 use embedded_hal::digital::{InputPin, OutputPin};
-use embedded_hal::spi::SpiDevice as SpiDeviceTrait;
+use embedded_hal_async::spi::SpiDevice as AsyncSpiDeviceTrait;
 
 // Static vars
 #[global_allocator]
@@ -189,15 +189,15 @@ async fn run_display<SPI, DC, BSY, RST>(
     busy: BSY,
     rst: RST,
 ) where
-    SPI: SpiDeviceTrait,
+    SPI: AsyncSpiDeviceTrait,
     DC: OutputPin,
     BSY: InputPin,
     RST: OutputPin,
 {
     let disp_interface = display_interface_spi::SPIInterface::new(spi_device, dc);
     let mut delay = Delay;
-    let mut ssd1680 = Ssd1680::new(disp_interface, busy, rst, &mut delay).unwrap();
-    ssd1680.clear_bw_frame().unwrap();
+    let mut ssd1680 = Ssd1680Async::new(disp_interface, busy, rst, &mut delay).await.unwrap();
+    ssd1680.clear_bw_frame().await.unwrap();
     let mut display_bw = Display2in13::bw();
     display_bw.set_rotation(DisplayRotation::Rotate270);
     display_bw
@@ -217,8 +217,8 @@ async fn run_display<SPI, DC, BSY, RST>(
         )
         .draw(&mut display_bw)
         .unwrap();
-        ssd1680.update_bw_frame(display_bw.buffer()).unwrap();
-        ssd1680.display_frame(&mut Delay).unwrap();
+        ssd1680.update_bw_frame(display_bw.buffer()).await.unwrap();
+        ssd1680.display_frame(&mut Delay).await.unwrap();
         Timer::after(delay_duration).await;
     }
 }
@@ -321,8 +321,8 @@ async fn main(spawner: Spawner) {
     )));
 
     info!("Building display");
-    let disp_spi: Spi<'_, _, Blocking> =
-        Spi::new_blocking_txonly(p.SPI0, p.PIN_2, p.PIN_3, spi::Config::default());
+    let disp_spi: Spi<'_, _, Async> =
+        Spi::new_txonly(p.SPI0, p.PIN_2, p.PIN_3, p.DMA_CH1, spi::Config::default());
     let disp_cs = Output::new(p.PIN_5, Level::High);
     let disp_spi_device = ExclusiveDevice::new(disp_spi, disp_cs, Delay);
     unwrap!(spawner.spawn(display_task(
