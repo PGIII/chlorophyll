@@ -9,7 +9,8 @@ use ratatui::DefaultTerminal;
 use tokio::net::UdpSocket;
 use tracing::*;
 
-const MAX_READINGS: usize = 500;
+/// Keep up to ~24 h of readings at ~1 reading/sensor/5 s (generous headroom).
+const MAX_READINGS: usize = 100_000;
 
 /// Application.
 #[derive(Debug)]
@@ -131,25 +132,29 @@ impl App {
     pub async fn tick(&mut self) {
         if let Some(sock) = &self.socket {
             let mut buf = [0u8; 1500];
-            match sock.try_recv_from(&mut buf) {
-                Ok((len, src)) => match from_bytes::<Packet>(&buf[..len]) {
-                    Ok(packet) => {
-                        let now = Utc::now();
-                        info!("[{}] Got msg from {} (id={:x})", now.format("%H:%M:%S%.3f"), src, packet.id());
-                        let PacketCommand::DataReading(data_type) = packet.command().clone();
-                        let entry = DataEntry { data_type, sensor_id: packet.id(), timestamp: now };
-                        if self.last_reading.len() >= MAX_READINGS {
-                            self.last_reading.remove(0);
+            // Drain all waiting packets so the OS buffer never fills up.
+            loop {
+                match sock.try_recv_from(&mut buf) {
+                    Ok((len, src)) => match from_bytes::<Packet>(&buf[..len]) {
+                        Ok(packet) => {
+                            let now = Utc::now();
+                            info!("[{}] Got msg from {} (id={:x})", now.format("%H:%M:%S%.3f"), src, packet.id());
+                            let PacketCommand::DataReading(data_type) = packet.command().clone();
+                            let entry = DataEntry { data_type, sensor_id: packet.id(), timestamp: now };
+                            if self.last_reading.len() >= MAX_READINGS {
+                                self.last_reading.remove(0);
+                            }
+                            self.last_reading.push(entry);
                         }
-                        self.last_reading.push(entry);
-                    }
+                        Err(e) => {
+                            error!("Error parsing msg {e}");
+                        }
+                    },
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                     Err(e) => {
-                        error!("Error parsing msg {e}");
+                        error!("Error reading {e}");
+                        break;
                     }
-                },
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(e) => {
-                    error!("Error reading {e}");
                 }
             }
         } else {

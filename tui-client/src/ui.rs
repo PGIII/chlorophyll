@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use chlorophyll_protocol::light::Light;
 use chlorophyll_protocol::temperature::Temperature;
-use chrono::{Duration, Local, Utc};
+use chrono::{Local, Utc};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -46,17 +46,10 @@ impl Widget for &App {
 
         let (temp_area, light_area) = (right_rows[0], right_rows[1]);
 
-        // 24-hour sliding window
         let now = Utc::now();
-        let window_start_time = now - Duration::hours(24);
-        let x_start = window_start_time.timestamp() as f64;
         let x_end = now.timestamp() as f64;
 
-        let window: Vec<_> = self
-            .last_reading
-            .iter()
-            .filter(|e| e.timestamp >= window_start_time)
-            .collect();
+        let window: Vec<_> = self.last_reading.iter().collect();
 
         // --- Data extraction (x = Unix timestamp) ---
 
@@ -140,7 +133,7 @@ impl Widget for &App {
         );
         sensor_list.render(sensor_area, buf);
 
-        // --- Centre panel: Temp & Humidity chart ---
+        // --- Center panel: Temp & Humidity chart ---
         let temp_dataset = Dataset::default()
             .name("Temp (°F)")
             .style(Style::default().fg(Color::Yellow))
@@ -172,11 +165,17 @@ impl Widget for &App {
             (cy_min - padding, cy_max + padding)
         };
 
+        // x_start = timestamp of the oldest reading, or 1 min before now if no data
+        let x_start = window
+            .first()
+            .map(|e| e.timestamp.timestamp() as f64)
+            .unwrap_or(x_end - 60.0);
+
         let x_labels: Vec<Line> = vec![
-            window_start_time
-                .with_timezone(&Local)
-                .format("%H:%M")
-                .to_string()
+            window
+                .first()
+                .map(|e| e.timestamp.with_timezone(&Local).format("%H:%M").to_string())
+                .unwrap_or_else(|| "No data".into())
                 .bold()
                 .into(),
             now.with_timezone(&Local)
