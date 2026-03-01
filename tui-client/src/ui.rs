@@ -33,17 +33,21 @@ impl Widget for &App {
 
         let content_area = outer_chunks[0];
 
-        // Inner: three columns
+        // Two columns: sensors left (40), charts right (60%)
         let cols = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(20),
-                Constraint::Percentage(55),
-                Constraint::Percentage(25),
-            ])
+            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
             .split(content_area);
 
-        let (sensor_area, temp_area, light_area) = (cols[0], cols[1], cols[2]);
+        let sensor_area = cols[0];
+
+        // Right column: temp/humidity on top, light on bottom
+        let right_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(cols[1]);
+
+        let (temp_area, light_area) = (right_rows[0], right_rows[1]);
 
         // Take only the latest CHART_WINDOW_SIZE readings
         let window_start = self.last_reading.len().saturating_sub(CHART_WINDOW_SIZE);
@@ -91,8 +95,7 @@ impl Widget for &App {
             .collect();
 
         // --- Sensor summary map: (temp_f, humidity_pct, lux) ---
-        let mut sensor_map: HashMap<u128, (Option<f32>, Option<f32>, Option<f32>)> =
-            HashMap::new();
+        let mut sensor_map: HashMap<u128, (Option<f32>, Option<f32>, Option<f32>)> = HashMap::new();
         for entry in self.last_reading.iter().rev() {
             let e = sensor_map.entry(entry.sensor_id).or_default();
             match &entry.data_type {
@@ -121,8 +124,8 @@ impl Widget for &App {
                 let hum_str = hum.map_or("--".into(), |v| format!("{:.1}%", v));
                 let lux_str = lux.map_or("--".into(), |v| format!("{:.0}lx", v));
                 let text = format!(
-                    "{:08x}\nT:{} H:{}\nL:{}",
-                    id & 0xFFFFFFFF,
+                    "{:16x} {} {} {}",
+                    id & 0xFFFFFFFFFFFFFFFF,
                     temp_str,
                     hum_str,
                     lux_str
@@ -131,8 +134,11 @@ impl Widget for &App {
             })
             .collect();
 
-        let sensor_list = List::new(items)
-            .block(Block::bordered().title("Sensors").border_type(BorderType::Rounded));
+        let sensor_list = List::new(items).block(
+            Block::bordered()
+                .title("Sensors")
+                .border_type(BorderType::Rounded),
+        );
         sensor_list.render(sensor_area, buf);
 
         // --- Centre panel: Temp & Humidity chart ---
@@ -191,6 +197,15 @@ impl Widget for &App {
 
         let cy_mid = (cy_min + cy_max) / 2.0;
 
+        let cur_temp = temperatures.last().map(|(_, v)| *v);
+        let cur_hum = humidities.last().map(|(_, v)| *v);
+        let cy_title = match (cur_temp, cur_hum) {
+            (Some(t), Some(h)) => format!("{:.1}°F / {:.1}%", t, h),
+            (Some(t), None) => format!("{:.1}°F / %", t),
+            (None, Some(h)) => format!("°F / {:.1}%", h),
+            (None, None) => "°F / %".into(),
+        };
+
         let temp_chart = Chart::new(vec![temp_dataset, hum_dataset])
             .block(
                 Block::bordered()
@@ -206,7 +221,7 @@ impl Widget for &App {
             )
             .y_axis(
                 Axis::default()
-                    .title("°F / %")
+                    .title(cy_title)
                     .style(Style::default().fg(Color::Gray))
                     .bounds([cy_min, cy_max])
                     .labels(vec![
@@ -242,6 +257,9 @@ impl Widget for &App {
 
         let lx_max = (lights.len().max(1) - 1).max(1) as f64;
 
+        let cur_lux = lights.last().map(|(_, v)| *v);
+        let ly_title = cur_lux.map_or("lux".into(), |v| format!("{:.0} lux", v));
+
         let light_chart = Chart::new(vec![light_dataset])
             .block(
                 Block::bordered()
@@ -257,7 +275,7 @@ impl Widget for &App {
             )
             .y_axis(
                 Axis::default()
-                    .title("lux")
+                    .title(ly_title)
                     .style(Style::default().fg(Color::Gray))
                     .bounds([ly_min, ly_max])
                     .labels(vec![
