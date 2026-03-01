@@ -9,6 +9,7 @@ extern crate alloc;
 mod temp_humidity_sensor;
 
 use alloc::format;
+use chlorophyll_protocol::light::Light;
 use chlorophyll_protocol::postcard::to_allocvec;
 use chlorophyll_protocol::temperature::Temperature;
 use chlorophyll_protocol::*;
@@ -54,6 +55,7 @@ use heapless::String as HeaplessString;
 use ssd1680::async_driver::Ssd1680Async;
 use ssd1680::graphics::{Display, Display2in13, DisplayRotation};
 use static_cell::StaticCell;
+use tsl2591_eh_driver::Driver as Tsl2591Driver;
 use {defmt_rtt as _, panic_probe as _};
 
 // Type defs
@@ -122,14 +124,27 @@ async fn i2c1_sensor_task(i2c_bus: &'static I2c1Bus, tx: SensorDataSender) {
     let mut aht20_uninit = aht20_driver::AHT20::new(i2c_device, aht20_driver::SENSOR_ADDRESS);
     let mut aht20 = aht20_uninit.init(timer).unwrap();
 
+    // TSL2591
+    let tsl_device = I2cDevice::new(i2c_bus);
+    let mut tsl2591 = Tsl2591Driver::new(tsl_device).unwrap();
+    tsl2591.enable().unwrap();
+
     loop {
         let measure = aht20.measure(timer).unwrap();
-        let temp = temperature::Celsius::new(measure.temperature);
-        let humidity = humidity::RelativeHumidity::new(measure.humidity);
-        tx.send(DataType::Temperature(temp)).await;
-        tx.send(DataType::RelativeHumidity(humidity)).await;
-        let delay = Duration::from_millis(100);
-        Timer::after(delay).await;
+        tx.send(DataType::Temperature(temperature::Celsius::new(
+            measure.temperature,
+        )))
+        .await;
+        tx.send(DataType::RelativeHumidity(humidity::RelativeHumidity::new(
+            measure.humidity,
+        )))
+        .await;
+
+        let (ch0, ch1) = tsl2591.get_channel_data().unwrap();
+        let lux_value = tsl2591.calculate_lux(ch0, ch1).unwrap();
+        tx.send(DataType::Light(light::Lux::new(lux_value))).await;
+
+        Timer::after(Duration::from_millis(100)).await;
     }
 }
 
@@ -220,6 +235,8 @@ async fn run_display<SPI, DC, BSY, RST>(
         let mut humidity = 0.0;
         let mut temp_count = 0;
         let mut temperature = 0.0;
+        let mut lux_count = 0;
+        let mut lux = 0.0;
         // TODO: this could probably be more robust since this expects temp and humidty to come at
         // the same time
         while let Ok(reading) = rx.try_receive() {
@@ -232,6 +249,10 @@ async fn run_display<SPI, DC, BSY, RST>(
                     humidity += relative_humidity.percent();
                     humidity_count += 1;
                 }
+                DataType::Light(in_lux) => {
+                    lux += in_lux.get_as_lux();
+                    lux_count += 1;
+                }
                 _ => {
                     //Something we don't care about here
                 }
@@ -240,14 +261,26 @@ async fn run_display<SPI, DC, BSY, RST>(
         info!("Got {} temp readings", temp_count);
         temperature /= temp_count as f32;
         humidity /= humidity_count as f32;
-        msg.clear();
-        write!(msg, "{:.2}F {:.2}%", temperature, humidity).expect("write to heapless string");
+        lux /= lux_count as f32;
         display_bw
             .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
             .unwrap();
+
+        msg.clear();
+        write!(msg, "{:.2}F {:.2}%", temperature, humidity).expect("write to heapless string");
         Text::new(
             &msg,
             Point::new(5, 10),
+            MonoTextStyle::new(&FONT_9X15_BOLD, BinaryColor::Off),
+        )
+        .draw(&mut display_bw)
+        .unwrap();
+
+        msg.clear();
+        write!(msg, "{:.2}lux", lux).expect("write to heapless string");
+        Text::new(
+            &msg,
+            Point::new(5, 25),
             MonoTextStyle::new(&FONT_9X15_BOLD, BinaryColor::Off),
         )
         .draw(&mut display_bw)

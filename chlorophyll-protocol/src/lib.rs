@@ -2,8 +2,9 @@
 
 pub mod temperature;
 pub mod humidity;
+pub mod light;
 
-use crate::{humidity::RelativeHumidity, temperature::Celsius};
+use crate::{humidity::RelativeHumidity, light::Lux, temperature::Celsius};
 pub use postcard;
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +12,7 @@ use serde::{Deserialize, Serialize};
 pub enum DataType {
     Temperature(Celsius),
     RelativeHumidity(RelativeHumidity),
+    Light(Lux),
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
