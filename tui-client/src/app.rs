@@ -131,6 +131,7 @@ impl App {
     /// needs to be updated at a fixed frame rate. E.g. polling a server, updating an animation.
     pub async fn tick(&mut self) {
         if let Some(sock) = &self.socket {
+            info!("Have socket, waiting for message");
             let mut buf = [0u8; 1500];
             // Drain all waiting packets so the OS buffer never fills up.
             loop {
@@ -138,9 +139,18 @@ impl App {
                     Ok((len, src)) => match from_bytes::<Packet>(&buf[..len]) {
                         Ok(packet) => {
                             let now = Utc::now();
-                            info!("[{}] Got msg from {} (id={:x})", now.format("%H:%M:%S%.3f"), src, packet.id());
+                            info!(
+                                "[{}] Got msg from {} (id={:x})",
+                                now.format("%H:%M:%S%.3f"),
+                                src,
+                                packet.id()
+                            );
                             let PacketCommand::DataReading(data_type) = packet.command().clone();
-                            let entry = DataEntry { data_type, sensor_id: packet.id(), timestamp: now };
+                            let entry = DataEntry {
+                                data_type,
+                                sensor_id: packet.id(),
+                                timestamp: now,
+                            };
                             if self.last_reading.len() >= MAX_READINGS {
                                 self.last_reading.remove(0);
                             }
@@ -159,6 +169,7 @@ impl App {
             }
         } else {
             //setup socket
+            info!("No socket, setting up");
             // Multicast group and port
             let multicast_addr = Ipv4Addr::new(239, 0, 0, 1); // Example multicast address
             let port = 5000;

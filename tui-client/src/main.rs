@@ -29,7 +29,7 @@ lazy_static! {
 #[command(version, about, long_about = None)]
 struct Args {
     /// Show the log panel at the bottom of the screen
-    #[arg(long, default_value = "false")]
+    #[arg(long, default_value = "true")]
     show_logs: bool,
 
     /// Hide the log panel at the bottom of the screen

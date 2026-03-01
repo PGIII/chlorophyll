@@ -1,3 +1,4 @@
+use chrono::Local;
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 
@@ -27,10 +28,11 @@ where
         };
         event.record(&mut visitor);
 
+        let ts = Local::now().format("%H:%M:%S%.3f");
         let log_entry = if message.is_empty() {
-            format!("[{}] {} ({}:{})", level, target, file, line)
+            format!("{} [{}] {} ({}:{})", ts, level, target, file, line)
         } else {
-            format!("[{}] {}: {} ({}:{})", level, target, message, file, line)
+            format!("{} [{}] {}: {} ({}:{})", ts, level, target, message, file, line)
         };
 
         if let Ok(mut logs) = LOGS.lock() {
