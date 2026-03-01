@@ -258,7 +258,6 @@ async fn run_display<SPI, DC, BSY, RST>(
                 }
             }
         }
-        info!("Got {} temp readings", temp_count);
         temperature /= temp_count as f32;
         humidity /= humidity_count as f32;
         lux /= lux_count as f32;

@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use chlorophyll_protocol::light::Light;
 use chlorophyll_protocol::temperature::Temperature;
-use chrono::Local;
+use chrono::{Duration, Local, Utc};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -15,9 +15,6 @@ use ratatui::{
 
 use crate::app::App;
 use crate::log_widget::LogListWidget;
-
-/// Maximum number of samples to display in the chart window
-const CHART_WINDOW_SIZE: usize = 1000;
 
 impl Widget for &App {
     fn render(self, area: Rect, buf: &mut Buffer) {
@@ -49,49 +46,51 @@ impl Widget for &App {
 
         let (temp_area, light_area) = (right_rows[0], right_rows[1]);
 
-        // Take only the latest CHART_WINDOW_SIZE readings
-        let window_start = self.last_reading.len().saturating_sub(CHART_WINDOW_SIZE);
-        let window = &self.last_reading[window_start..];
+        // 24-hour sliding window
+        let now = Utc::now();
+        let window_start_time = now - Duration::hours(24);
+        let x_start = window_start_time.timestamp() as f64;
+        let x_end = now.timestamp() as f64;
 
-        // --- Data extraction ---
+        let window: Vec<_> = self
+            .last_reading
+            .iter()
+            .filter(|e| e.timestamp >= window_start_time)
+            .collect();
+
+        // --- Data extraction (x = Unix timestamp) ---
 
         let temperatures: Vec<(f64, f64)> = window
             .iter()
             .filter_map(|entry| {
                 if let chlorophyll_protocol::DataType::Temperature(t) = &entry.data_type {
-                    Some(t.get_as_f() as f64)
+                    Some((entry.timestamp.timestamp() as f64, t.get_as_f() as f64))
                 } else {
                     None
                 }
             })
-            .enumerate()
-            .map(|(i, v)| (i as f64, v))
             .collect();
 
         let humidities: Vec<(f64, f64)> = window
             .iter()
             .filter_map(|entry| {
                 if let chlorophyll_protocol::DataType::RelativeHumidity(h) = &entry.data_type {
-                    Some(h.percent() as f64)
+                    Some((entry.timestamp.timestamp() as f64, h.percent() as f64))
                 } else {
                     None
                 }
             })
-            .enumerate()
-            .map(|(i, v)| (i as f64, v))
             .collect();
 
         let lights: Vec<(f64, f64)> = window
             .iter()
             .filter_map(|entry| {
                 if let chlorophyll_protocol::DataType::Light(l) = &entry.data_type {
-                    Some(l.get_as_lux() as f64)
+                    Some((entry.timestamp.timestamp() as f64, l.get_as_lux() as f64))
                 } else {
                     None
                 }
             })
-            .enumerate()
-            .map(|(i, v)| (i as f64, v))
             .collect();
 
         // --- Sensor summary map: (temp_f, humidity_pct, lux) ---
@@ -173,27 +172,19 @@ impl Widget for &App {
             (cy_min - padding, cy_max + padding)
         };
 
-        let cx_max = (temperatures.len().max(humidities.len()).max(1) - 1).max(1) as f64;
-
-        let x_labels: Vec<Line> = if let Some(first) = window.first() {
-            let start = first
-                .timestamp
+        let x_labels: Vec<Line> = vec![
+            window_start_time
                 .with_timezone(&Local)
-                .format("%H:%M:%S")
-                .to_string();
-            if let Some(last) = window.last() {
-                let end = last
-                    .timestamp
-                    .with_timezone(&Local)
-                    .format("%H:%M:%S")
-                    .to_string();
-                vec![start.bold().into(), end.bold().into()]
-            } else {
-                vec![start.into()]
-            }
-        } else {
-            vec!["No data".into()]
-        };
+                .format("%H:%M")
+                .to_string()
+                .bold()
+                .into(),
+            now.with_timezone(&Local)
+                .format("%H:%M")
+                .to_string()
+                .bold()
+                .into(),
+        ];
 
         let cy_mid = (cy_min + cy_max) / 2.0;
 
@@ -216,7 +207,7 @@ impl Widget for &App {
                 Axis::default()
                     .title("Time")
                     .style(Style::default().fg(Color::Gray))
-                    .bounds([0.0, cx_max])
+                    .bounds([x_start, x_end])
                     .labels(x_labels),
             )
             .y_axis(
@@ -255,8 +246,6 @@ impl Widget for &App {
             (ly_min - padding, ly_max + padding)
         };
 
-        let lx_max = (lights.len().max(1) - 1).max(1) as f64;
-
         let cur_lux = lights.last().map(|(_, v)| *v);
         let ly_title = cur_lux.map_or("lux".into(), |v| format!("{:.0} lux", v));
 
@@ -270,7 +259,7 @@ impl Widget for &App {
                 Axis::default()
                     .title("Time")
                     .style(Style::default().fg(Color::Gray))
-                    .bounds([0.0, lx_max])
+                    .bounds([x_start, x_end])
                     .labels(Vec::<Line>::new()),
             )
             .y_axis(
