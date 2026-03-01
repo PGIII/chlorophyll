@@ -1,14 +1,16 @@
 #![no_std]
 
 pub mod temperature;
+pub mod humidity;
 
-use crate::temperature::Celsius;
+use crate::{humidity::RelativeHumidity, temperature::Celsius};
 pub use postcard;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub enum DataType {
     Temperature(Celsius),
+    RelativeHumidity(RelativeHumidity),
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -22,7 +24,7 @@ type SensorID = u128;
 pub struct Packet {
     command: PacketCommand,
     /// Unique ID to identify the sensor
-    id: SensorID, // What size do we need to serial numbers ?
+    id: SensorID, 
 }
 impl Packet {
     pub fn new(command: PacketCommand, id: SensorID) -> Self {

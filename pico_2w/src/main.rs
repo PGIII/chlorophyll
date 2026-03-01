@@ -10,8 +10,10 @@ mod temp_humidity_sensor;
 
 use alloc::format;
 use chlorophyll_protocol::postcard::to_allocvec;
+use chlorophyll_protocol::temperature::Temperature;
 use chlorophyll_protocol::*;
 use core::cell::RefCell;
+use core::fmt::Write;
 use core::net::{IpAddr, Ipv4Addr};
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
@@ -45,11 +47,13 @@ use embedded_graphics::mono_font::iso_8859_5::FONT_9X15_BOLD;
 use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
+use embedded_hal::digital::{InputPin, OutputPin};
+use embedded_hal_async::spi::SpiDevice as AsyncSpiDeviceTrait;
 use embedded_hal_bus::spi::ExclusiveDevice;
+use heapless::String as HeaplessString;
 use ssd1680::async_driver::Ssd1680Async;
 use ssd1680::graphics::{Display, Display2in13, DisplayRotation};
 use static_cell::StaticCell;
-
 use {defmt_rtt as _, panic_probe as _};
 
 // Type defs
@@ -62,9 +66,6 @@ type SensorDataReceiver =
 type SensorDataSender =
     Sender<'static, CriticalSectionRawMutex, DataType, SENSOR_DATA_CHANNEL_DEPTH>;
 type DisplaySpiDevice = ExclusiveDevice<Spi<'static, SPI0, Async>, Output<'static>, Delay>;
-
-use embedded_hal::digital::{InputPin, OutputPin};
-use embedded_hal_async::spi::SpiDevice as AsyncSpiDeviceTrait;
 
 // Static vars
 #[global_allocator]
@@ -124,7 +125,9 @@ async fn i2c1_sensor_task(i2c_bus: &'static I2c1Bus, tx: SensorDataSender) {
     loop {
         let measure = aht20.measure(timer).unwrap();
         let temp = temperature::Celsius::new(measure.temperature);
+        let humidity = humidity::RelativeHumidity::new(measure.humidity);
         tx.send(DataType::Temperature(temp)).await;
+        tx.send(DataType::RelativeHumidity(humidity)).await;
         let delay = Duration::from_millis(100);
         Timer::after(delay).await;
     }
@@ -188,6 +191,7 @@ async fn run_display<SPI, DC, BSY, RST>(
     dc: DC,
     busy: BSY,
     rst: RST,
+    rx: SensorDataReceiver,
 ) where
     SPI: AsyncSpiDeviceTrait,
     DC: OutputPin,
@@ -196,7 +200,9 @@ async fn run_display<SPI, DC, BSY, RST>(
 {
     let disp_interface = display_interface_spi::SPIInterface::new(spi_device, dc);
     let mut delay = Delay;
-    let mut ssd1680 = Ssd1680Async::new(disp_interface, busy, rst, &mut delay).await.unwrap();
+    let mut ssd1680 = Ssd1680Async::new(disp_interface, busy, rst, &mut delay)
+        .await
+        .unwrap();
     ssd1680.clear_bw_frame().await.unwrap();
     let mut display_bw = Display2in13::bw();
     display_bw.set_rotation(DisplayRotation::Rotate270);
@@ -205,8 +211,37 @@ async fn run_display<SPI, DC, BSY, RST>(
         .unwrap();
 
     let delay_duration = Duration::from_millis(5000);
+    let mut msg: HeaplessString<256> = HeaplessString::new();
     loop {
-        let msg = format!("FIXME");
+        // Wait for data
+        rx.ready_to_receive().await;
+        // Accumulate the avg of all available data
+        let mut humidity_count = 0;
+        let mut humidity = 0.0;
+        let mut temp_count = 0;
+        let mut temperature = 0.0;
+        // TODO: this could probably be more robust since this expects temp and humidty to come at
+        // the same time
+        while let Ok(reading) = rx.try_receive() {
+            match reading {
+                DataType::Temperature(celsius) => {
+                    temperature += celsius.get_as_f();
+                    temp_count += 1;
+                }
+                DataType::RelativeHumidity(relative_humidity) => {
+                    humidity += relative_humidity.percent();
+                    humidity_count += 1;
+                }
+                _ => {
+                    //Something we don't care about here
+                }
+            }
+        }
+        info!("Got {} temp readings", temp_count);
+        temperature /= temp_count as f32;
+        humidity /= humidity_count as f32;
+        msg.clear();
+        write!(msg, "{:.2}F {:.2}%", temperature, humidity).expect("write to heapless string");
         display_bw
             .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
             .unwrap();
@@ -230,8 +265,9 @@ async fn display_task(
     dc: Output<'static>,
     busy: Input<'static>,
     rst: Output<'static>,
+    rx: SensorDataReceiver,
 ) {
-    run_display(spi_device, dc, busy, rst).await;
+    run_display(spi_device, dc, busy, rst, rx).await;
 }
 
 #[embassy_executor::main]
@@ -327,9 +363,10 @@ async fn main(spawner: Spawner) {
     let disp_spi_device = ExclusiveDevice::new(disp_spi, disp_cs, Delay);
     unwrap!(spawner.spawn(display_task(
         disp_spi_device,
-        Output::new(p.PIN_4, Level::Low),  // dc
-        Input::new(p.PIN_1, embassy_rp::gpio::Pull::Up),  // busy
-        Output::new(p.PIN_0, Level::Low),  // rst
+        Output::new(p.PIN_4, Level::Low),                // dc
+        Input::new(p.PIN_1, embassy_rp::gpio::Pull::Up), // busy
+        Output::new(p.PIN_0, Level::Low),                // rst
+        SENSOR_DATA_CHANNEL.receiver()
     )));
 
     info!("Init I2c Shared bus");
