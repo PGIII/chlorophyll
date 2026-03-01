@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use chlorophyll_protocol::light::Light;
 use chlorophyll_protocol::temperature::Temperature;
-use chrono::{Local, Utc};
+use chrono::{DateTime, Local, Utc};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -86,8 +86,8 @@ impl Widget for &App {
             })
             .collect();
 
-        // --- Sensor summary map: (temp_f, humidity_pct, lux) ---
-        let mut sensor_map: HashMap<u128, (Option<f32>, Option<f32>, Option<f32>)> = HashMap::new();
+        // --- Sensor summary map: (temp_f, humidity_pct, lux, last_seen) ---
+        let mut sensor_map: HashMap<u128, (Option<f32>, Option<f32>, Option<f32>, Option<DateTime<Utc>>)> = HashMap::new();
         for entry in self.last_reading.iter().rev() {
             let e = sensor_map.entry(entry.sensor_id).or_default();
             match &entry.data_type {
@@ -102,6 +102,10 @@ impl Widget for &App {
                 }
                 _ => {}
             }
+            // Record most-recent timestamp (first time we see this sensor when iterating rev)
+            if e.3.is_none() {
+                e.3 = Some(entry.timestamp);
+            }
         }
 
         // --- Left panel: sensor list ---
@@ -111,16 +115,24 @@ impl Widget for &App {
         let items: Vec<ListItem> = sensor_ids
             .iter()
             .map(|id| {
-                let (temp, hum, lux) = sensor_map[id];
+                let (temp, hum, lux, last_seen) = sensor_map[id];
                 let temp_str = temp.map_or("--".into(), |v| format!("{:.1}°F", v));
                 let hum_str = hum.map_or("--".into(), |v| format!("{:.1}%", v));
                 let lux_str = lux.map_or("--".into(), |v| format!("{:.0}lx", v));
+                let age_str = last_seen.map_or("--".into(), |ts| {
+                    let secs = (now - ts).num_seconds().max(0);
+                    if secs < 60 {
+                        format!("{}s", secs)
+                    } else if secs < 3600 {
+                        format!("{}m{}s", secs / 60, secs % 60)
+                    } else {
+                        format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
+                    }
+                });
                 let text = format!(
-                    "{:16x} {} {} {}",
+                    "{:16x} {} {} {} {}",
                     id & 0xFFFFFFFFFFFFFFFF,
-                    temp_str,
-                    hum_str,
-                    lux_str
+                    temp_str, hum_str, lux_str, age_str
                 );
                 ListItem::new(text)
             })
