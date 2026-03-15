@@ -140,17 +140,34 @@ async fn i2c1_sensor_task(i2c_bus: &'static I2c1Bus, tx: SensorDataSender) {
         )))
         .await;
 
-        let (ch0, ch1) = tsl2591.get_channel_data().unwrap();
-
-        let lux_value = match tsl2591.calculate_lux(ch0, ch1) {
-            Ok(lux_value) => light::Lux::new(lux_value),
-            Err(_err) => {
-                //TODO: handle the different errors more explicitly
-                warn!("Error converting light sensor reading");
-                light::Lux::new(f32::MAX)
+        let lux_value = match tsl2591.get_channel_data() {
+            Err(_) => {
+                warn!("Light sensor I2C error reading channel data");
+                None
             }
+            Ok((ch0, ch1)) => match tsl2591.calculate_lux(ch0, ch1) {
+                Ok(lux) => Some(light::Lux::new(lux)),
+                Err(tsl2591_eh_driver::Error::SignalOverflow()) => {
+                    warn!("Light sensor saturated (signal overflow)");
+                    None
+                }
+                Err(tsl2591_eh_driver::Error::InfraredOverflow()) => {
+                    warn!("Light sensor infrared overflow");
+                    None
+                }
+                Err(tsl2591_eh_driver::Error::IdMismatch(id)) => {
+                    warn!("Light sensor ID mismatch: {}", id);
+                    None
+                }
+                Err(tsl2591_eh_driver::Error::I2cError(_)) => {
+                    warn!("Light sensor I2C error during lux calculation");
+                    None
+                }
+            },
         };
-        tx.send(DataType::Light(lux_value)).await;
+        if let Some(lux_value) = lux_value {
+            tx.send(DataType::Light(lux_value)).await;
+        }
 
         Timer::after(Duration::from_millis(100)).await;
     }
