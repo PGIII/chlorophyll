@@ -141,8 +141,16 @@ async fn i2c1_sensor_task(i2c_bus: &'static I2c1Bus, tx: SensorDataSender) {
         .await;
 
         let (ch0, ch1) = tsl2591.get_channel_data().unwrap();
-        let lux_value = tsl2591.calculate_lux(ch0, ch1).unwrap();
-        tx.send(DataType::Light(light::Lux::new(lux_value))).await;
+
+        let lux_value = match tsl2591.calculate_lux(ch0, ch1) {
+            Ok(lux_value) => light::Lux::new(lux_value),
+            Err(_err) => {
+                //TODO: handle the different errors more explicitly
+                warn!("Error converting light sensor reading");
+                light::Lux::new(f32::MAX)
+            }
+        };
+        tx.send(DataType::Light(lux_value)).await;
 
         Timer::after(Duration::from_millis(100)).await;
     }
