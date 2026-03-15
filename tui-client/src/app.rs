@@ -131,7 +131,6 @@ impl App {
     /// needs to be updated at a fixed frame rate. E.g. polling a server, updating an animation.
     pub async fn tick(&mut self) {
         if let Some(sock) = &self.socket {
-            info!("Have socket, waiting for message");
             let mut buf = [0u8; 1500];
             // Drain all waiting packets so the OS buffer never fills up.
             loop {
@@ -139,7 +138,7 @@ impl App {
                     Ok((len, src)) => match from_bytes::<Packet>(&buf[..len]) {
                         Ok(packet) => {
                             let now = Utc::now();
-                            info!(
+                            debug!(
                                 "[{}] Got msg from {} (id={:x})",
                                 now.format("%H:%M:%S%.3f"),
                                 src,
