@@ -1,8 +1,10 @@
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::collections::HashMap;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use crate::event::{AppEvent, Event, EventHandler};
 use crate::log_widget::LogState;
-use chlorophyll_protocol::{DataType, Packet, PacketCommand, postcard::from_bytes};
+use chlorophyll_protocol::postcard::{from_bytes, to_allocvec};
+use chlorophyll_protocol::{DataType, Packet, PacketCommand};
 use chrono::{DateTime, Utc};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
@@ -11,6 +13,11 @@ use tracing::*;
 
 /// Keep up to ~24 h of readings at ~1 reading/sensor/5 s (generous headroom).
 const MAX_READINGS: usize = 100_000;
+
+const MULTICAST_ADDR: Ipv4Addr = Ipv4Addr::new(239, 0, 0, 1);
+const PORT: u16 = 5000;
+/// Re-send Discover every ~30 s (at 30 fps tick rate).
+const REDISCOVER_TICKS: u64 = 900;
 
 /// Application.
 #[derive(Debug)]
@@ -24,8 +31,11 @@ pub struct App {
 
     pub socket: Option<UdpSocket>,
     pub last_reading: Vec<DataEntry>,
-
     pub log_state: LogState,
+
+    /// Known devices: sensor_id → source socket address
+    pub known_devices: HashMap<u128, SocketAddr>,
+    tick_count: u64,
 }
 
 #[derive(Debug)]
@@ -44,6 +54,8 @@ impl Default for App {
             socket: None,
             last_reading: Vec::new(),
             log_state: LogState::new(true),
+            known_devices: HashMap::new(),
+            tick_count: 0,
         }
     }
 }
@@ -58,6 +70,8 @@ impl App {
             socket: None,
             last_reading: Vec::new(),
             log_state,
+            known_devices: HashMap::new(),
+            tick_count: 0,
         }
     }
 
@@ -126,67 +140,39 @@ impl App {
     }
 
     /// Handles the tick event of the terminal.
-    ///
-    /// The tick event is where you can update the state of your application with any logic that
-    /// needs to be updated at a fixed frame rate. E.g. polling a server, updating an animation.
     pub async fn tick(&mut self) {
+        self.tick_count = self.tick_count.wrapping_add(1);
+
         if let Some(sock) = &self.socket {
-            let mut buf = [0u8; 1500];
-            // Drain all waiting packets so the OS buffer never fills up.
-            loop {
-                match sock.try_recv_from(&mut buf) {
-                    Ok((len, src)) => match from_bytes::<Packet>(&buf[..len]) {
-                        Ok(packet) => {
-                            let now = Utc::now();
-                            debug!(
-                                "[{}] Got msg from {} (id={:x})",
-                                now.format("%H:%M:%S%.3f"),
-                                src,
-                                packet.id()
-                            );
-                            let PacketCommand::DataReading(data_type) = packet.command().clone();
-                            let entry = DataEntry {
-                                data_type,
-                                sensor_id: packet.id(),
-                                timestamp: now,
-                            };
-                            if self.last_reading.len() >= MAX_READINGS {
-                                self.last_reading.remove(0);
-                            }
-                            self.last_reading.push(entry);
-                        }
-                        Err(e) => {
-                            error!("Error parsing msg {e}");
-                        }
-                    },
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Err(e) => {
-                        error!("Error reading {e}");
-                        break;
-                    }
+            // Re-discover periodically so we catch picos that restarted.
+            if self.tick_count % REDISCOVER_TICKS == 0 {
+                if let Err(e) = send_discover(sock).await {
+                    error!("Rediscover send error: {e}");
                 }
             }
-        } else {
-            //setup socket
-            info!("No socket, setting up");
-            // Multicast group and port
-            let multicast_addr = Ipv4Addr::new(239, 0, 0, 1); // Example multicast address
-            let port = 5000;
 
-            // Bind to any address on the given port
-            let socket_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
+            if let Err(e) =
+                process_packets(sock, &mut self.known_devices, &mut self.last_reading).await
+            {
+                error!("process_packets error: {e}");
+            }
+        } else {
+            info!("No socket, setting up");
+            let socket_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, PORT);
             match UdpSocket::bind(socket_addr).await {
                 Ok(sock) => {
-                    // Join the multicast group on the default interface (0.0.0.0)
-                    if let Err(e) = sock.join_multicast_v4(multicast_addr, Ipv4Addr::UNSPECIFIED) {
-                        error!("Couldn't join multicastg group {e}");
+                    if let Err(e) = sock.join_multicast_v4(MULTICAST_ADDR, Ipv4Addr::UNSPECIFIED) {
+                        error!("Couldn't join multicast group: {e}");
                         return;
                     }
-                    info!("Listening for multicast on {}:{}", multicast_addr, port);
+                    info!("Joined multicast {}:{}", MULTICAST_ADDR, PORT);
+                    if let Err(e) = send_discover(&sock).await {
+                        error!("Initial Discover send error: {e}");
+                    }
                     self.socket = Some(sock);
                 }
                 Err(e) => {
-                    eprintln!("Couldn't open socket {e}");
+                    error!("Couldn't open socket: {e}");
                 }
             }
         }
@@ -204,4 +190,74 @@ impl App {
     pub fn decrement_counter(&mut self) {
         self.counter = self.counter.saturating_sub(1);
     }
+}
+
+// ─── Testable network helpers ────────────────────────────────────────────────
+
+/// Send a `Discover` packet to the multicast group so picos can announce themselves.
+pub async fn send_discover(socket: &UdpSocket) -> color_eyre::Result<()> {
+    let packet = Packet::new(PacketCommand::Discover, 0);
+    let data = to_allocvec(&packet).map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
+    let dest = SocketAddrV4::new(MULTICAST_ADDR, PORT);
+    socket.send_to(&data, dest).await?;
+    info!("Sent Discover to {}", dest);
+    Ok(())
+}
+
+/// Drain all pending inbound packets and handle protocol logic.
+///
+/// - `DiscoverResponse` → record device, unicast `StartStreaming`
+/// - `DataReading`      → append to `readings`
+pub async fn process_packets(
+    socket: &UdpSocket,
+    known_devices: &mut HashMap<u128, SocketAddr>,
+    readings: &mut Vec<DataEntry>,
+) -> color_eyre::Result<()> {
+    let mut buf = [0u8; 1500];
+    loop {
+        match socket.try_recv_from(&mut buf) {
+            Ok((len, src)) => match from_bytes::<Packet>(&buf[..len]) {
+                Ok(packet) => match packet.command().clone() {
+                    PacketCommand::DiscoverResponse => {
+                        let id = packet.id();
+                        info!("DiscoverResponse from {} (id={:x})", src, id);
+                        known_devices.insert(id, src);
+                        let start = Packet::new(PacketCommand::StartStreaming, 0);
+                        let data =
+                            to_allocvec(&start).map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
+                        socket.send_to(&data, src).await?;
+                        info!("Sent StartStreaming to {}", src);
+                    }
+                    PacketCommand::DataReading(data_type) => {
+                        let now = Utc::now();
+                        debug!(
+                            "[{}] Got DataReading from {} (id={:x})",
+                            now.format("%H:%M:%S%.3f"),
+                            src,
+                            packet.id()
+                        );
+                        let entry = DataEntry {
+                            data_type,
+                            sensor_id: packet.id(),
+                            timestamp: now,
+                        };
+                        if readings.len() >= MAX_READINGS {
+                            readings.remove(0);
+                        }
+                        readings.push(entry);
+                    }
+                    _ => {}
+                },
+                Err(e) => {
+                    error!("Error parsing packet: {e}");
+                }
+            },
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(e) => {
+                error!("Error reading from socket: {e}");
+                break;
+            }
+        }
+    }
+    Ok(())
 }

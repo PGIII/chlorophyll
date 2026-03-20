@@ -1,11 +1,6 @@
-use crate::app::App;
-use crate::log_widget::LogState;
-
-pub mod app;
-pub mod event;
-pub mod log_widget;
-pub mod tracing_layer;
-pub mod ui;
+use tui_client::app::App;
+use tui_client::log_widget::LogState;
+use tui_client::tracing_layer;
 
 use clap::Parser;
 use color_eyre::eyre::Result;
