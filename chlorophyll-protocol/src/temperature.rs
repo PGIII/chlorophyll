@@ -50,6 +50,7 @@ impl Temperature for Celsius {
 }
 
 impl Farenheit {
+    #[allow(dead_code)]
     pub fn new(value: f32) -> Self {
         Self { value }
     }

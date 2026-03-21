@@ -8,21 +8,19 @@ extern crate alloc;
 
 mod temp_humidity_sensor;
 
-use alloc::format;
 use chlorophyll_protocol::light::Light;
 use chlorophyll_protocol::postcard::to_allocvec;
 use chlorophyll_protocol::temperature::Temperature;
 use chlorophyll_protocol::*;
 use core::cell::RefCell;
 use core::fmt::Write;
-use core::net::{IpAddr, Ipv4Addr};
+use core::net::Ipv4Addr;
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
-use defmt::{self, info, println, unwrap, warn};
+use defmt::{info, unwrap, warn};
 use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either, select};
-use embassy_futures::yield_now;
 use embassy_net::{IpAddress, Stack};
 use embassy_net::{
     IpEndpoint, StackResources,
@@ -320,9 +318,6 @@ async fn run_display<SPI, DC, BSY, RST>(
                 DataType::Light(in_lux) => {
                     lux += in_lux.get_as_lux();
                     lux_count += 1;
-                }
-                _ => {
-                    //Something we don't care about here
                 }
             }
         }
