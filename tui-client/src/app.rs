@@ -144,7 +144,7 @@ impl App {
         self.tick_count = self.tick_count.wrapping_add(1);
 
         if let Some(sock) = &self.socket {
-            // Re-discover periodically so we catch picos that restarted.
+            // Re-discover periodically so we catch any new sensors
             if self.tick_count % REDISCOVER_TICKS == 0 {
                 if let Err(e) = send_discover(sock).await {
                     error!("Rediscover send error: {e}");
@@ -194,7 +194,7 @@ impl App {
 
 // ─── Testable network helpers ────────────────────────────────────────────────
 
-/// Send a `Discover` packet to the multicast group so picos can announce themselves.
+/// Send a `Discover` packet to the multicast group to find any online sensors
 pub async fn send_discover(socket: &UdpSocket) -> color_eyre::Result<()> {
     let packet = Packet::new(PacketCommand::Discover, 0);
     let data = to_allocvec(&packet).map_err(|e| color_eyre::eyre::eyre!("{e}"))?;

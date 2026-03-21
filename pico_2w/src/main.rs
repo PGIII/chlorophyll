@@ -217,6 +217,7 @@ async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver) {
     let mut recv_buf = [0u8; 1500];
 
     loop {
+        // Wait for either a new server command or a new data reading to send to a server
         match select(socket.recv_from(&mut recv_buf), rx.receive()).await {
             Either::First(recv_result) => match recv_result {
                 Ok((len, meta)) => {
@@ -304,7 +305,7 @@ async fn run_display<SPI, DC, BSY, RST>(
         let mut temperature = 0.0;
         let mut lux_count = 0;
         let mut lux = 0.0;
-        // TODO: this could probably be more robust since this expects temp and humidty to come at
+        // TODO: this could probably be more robust since this expects temp and humidity to come at
         // the same time
         while let Ok(reading) = rx.try_receive() {
             match reading {
