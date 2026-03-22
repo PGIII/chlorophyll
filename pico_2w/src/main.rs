@@ -52,7 +52,7 @@ use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal_async::spi::SpiDevice as AsyncSpiDeviceTrait;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use heapless::String as HeaplessString;
-use ssd1680::async_driver::Ssd1680Async;
+use ssd1680::driver::Ssd1680Async;
 use ssd1680::graphics::{Display, Display2in13, DisplayRotation};
 use static_cell::StaticCell;
 use tsl2591_eh_driver::Driver as Tsl2591Driver;
@@ -280,9 +280,8 @@ async fn run_display<SPI, DC, BSY, RST>(
     BSY: InputPin,
     RST: OutputPin,
 {
-    let disp_interface = display_interface_spi::SPIInterface::new(spi_device, dc);
     let mut delay = Delay;
-    let mut ssd1680 = Ssd1680Async::new(disp_interface, busy, rst, &mut delay)
+    let mut ssd1680 = Ssd1680Async::new(spi_device, busy, dc, rst, &mut delay)
         .await
         .unwrap();
     ssd1680.clear_bw_frame().await.unwrap();
