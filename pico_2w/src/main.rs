@@ -15,6 +15,7 @@ use chlorophyll_protocol::*;
 use core::cell::RefCell;
 use core::fmt::Write;
 use core::net::Ipv4Addr;
+use core::ops::{Add, AddAssign, Deref, Div};
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use defmt::{info, unwrap, warn};
@@ -321,15 +322,19 @@ async fn run_display<SPI, DC, BSY, RST>(
                 }
             }
         }
-        temperature /= temp_count as f32;
-        humidity /= humidity_count as f32;
-        lux /= lux_count as f32;
         display_bw
             .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
             .unwrap();
 
         msg.clear();
-        write!(msg, "{:.2}F {:.2}%", temperature, humidity).expect("write to heapless string");
+        if temp_count > 0 && humidity_count > 0 {
+            temperature /= temp_count as f32;
+            humidity /= humidity_count as f32;
+            write!(msg, "{:.2}F {:.2}%", temperature, humidity).expect("write to heapless string");
+        } else {
+            write!(msg, "No Temp Data").expect("write to heapless string");
+        }
+
         Text::new(
             &msg,
             Point::new(5, 10),
@@ -339,7 +344,12 @@ async fn run_display<SPI, DC, BSY, RST>(
         .unwrap();
 
         msg.clear();
-        write!(msg, "{:.2}lux", lux).expect("write to heapless string");
+        if lux_count > 0 {
+            lux /= lux_count as f32;
+            write!(msg, "{:.2}lux", lux).expect("write to heapless string");
+        } else {
+            write!(msg, "No Data lux").expect("write to heapless string");
+        }
         Text::new(
             &msg,
             Point::new(5, 25),
