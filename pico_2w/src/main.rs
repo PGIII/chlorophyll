@@ -12,7 +12,8 @@ use chlorophyll_protocol::light::Light;
 use chlorophyll_protocol::postcard::to_allocvec;
 use chlorophyll_protocol::temperature::Temperature;
 use chlorophyll_protocol::*;
-use chlorophyll_ui::display::{DisplayState, render_frame};
+use chlorophyll_ui::display::{DisplayState, SensorDisplay};
+use chlorophyll_ui::displays::binary_250x122::Display250x122Binary;
 use core::cell::RefCell;
 use core::net::Ipv4Addr;
 use cyw43::JoinOptions;
@@ -277,8 +278,8 @@ async fn run_display<SPI, DC, BSY, RST>(
         .await
         .unwrap();
     ssd1680.clear_bw_frame().await.unwrap();
-    let mut display_bw = Display2in13::bw();
-    display_bw.set_rotation(DisplayRotation::Rotate270);
+    let mut display = Display250x122Binary::new(Display2in13::bw());
+    display.inner.set_rotation(DisplayRotation::Rotate270);
 
     let delay_duration = Duration::from_millis(5000);
 
@@ -333,8 +334,8 @@ async fn run_display<SPI, DC, BSY, RST>(
             lux: lux_avg,
         };
 
-        render_frame(&mut display_bw, &state).unwrap();
-        ssd1680.update_bw_frame(display_bw.buffer()).await.unwrap();
+        display.render(&state).unwrap();
+        ssd1680.update_bw_frame(display.inner.buffer()).await.unwrap();
         ssd1680.display_frame(&mut Delay).await.unwrap();
         Timer::after(delay_duration).await;
     }
