@@ -200,6 +200,7 @@ dependencies = [
  "assign-resources",
  "byte-slice-cast",
  "chlorophyll-protocol",
+ "chlorophyll-ui",
  "cortex-m",
  "cortex-m-rt",
  "critical-section",
@@ -252,6 +253,14 @@ version = "0.1.0"
 dependencies = [
  "postcard",
  "serde",
+]
+
+[[package]]
+name = "chlorophyll-ui"
+version = "0.1.0"
+dependencies = [
+ "embedded-graphics",
+ "heapless 0.8.0",
 ]
 
 [[package]]

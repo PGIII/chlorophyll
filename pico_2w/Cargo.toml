@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 # local depends
 ssd1680 = { path = "../ssd1680", features = ["async"] }
 chlorophyll-protocol = { path = "../chlorophyll-protocol/"}
+chlorophyll-ui = { path = "../chlorophyll-ui" }
 embassy-embedded-hal = { version = "0.5.0", features = ["defmt"] }
 embassy-sync = { version = "0.7", features = ["defmt"] }
 embassy-executor = { version = "0.9", default-features = false, features = [

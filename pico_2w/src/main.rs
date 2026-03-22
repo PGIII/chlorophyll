@@ -12,10 +12,9 @@ use chlorophyll_protocol::light::Light;
 use chlorophyll_protocol::postcard::to_allocvec;
 use chlorophyll_protocol::temperature::Temperature;
 use chlorophyll_protocol::*;
+use chlorophyll_ui::display::{DisplayState, render_frame};
 use core::cell::RefCell;
-use core::fmt::Write;
 use core::net::Ipv4Addr;
-use core::ops::{Add, AddAssign, Deref, Div};
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use defmt::{info, unwrap, warn};
@@ -42,17 +41,9 @@ use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::channel::{Channel, Receiver, Sender};
 use embassy_time::{Delay, Duration, Timer};
 use embedded_alloc::LlffHeap as Heap;
-use embedded_graphics::geometry::Point;
-use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::mono_font::ascii::FONT_10X20;
-use embedded_graphics::mono_font::iso_8859_5::FONT_9X15_BOLD;
-use embedded_graphics::pixelcolor::BinaryColor;
-use embedded_graphics::prelude::*;
-use embedded_graphics::text::Text;
 use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal_async::spi::SpiDevice as AsyncSpiDeviceTrait;
 use embedded_hal_bus::spi::ExclusiveDevice;
-use heapless::String as HeaplessString;
 use ssd1680::driver::Ssd1680Async;
 use ssd1680::graphics::{Display, Display2in13, DisplayRotation};
 use static_cell::StaticCell;
@@ -288,76 +279,61 @@ async fn run_display<SPI, DC, BSY, RST>(
     ssd1680.clear_bw_frame().await.unwrap();
     let mut display_bw = Display2in13::bw();
     display_bw.set_rotation(DisplayRotation::Rotate270);
-    display_bw
-        .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
-        .unwrap();
 
     let delay_duration = Duration::from_millis(5000);
-    let mut msg: HeaplessString<256> = HeaplessString::new();
-    let h1_font = FONT_10X20;
+
+    // Main render loop
+    // every 5ms, accumulate all available sensors data
+    // and render a new frame
     loop {
         // Wait for data
         rx.ready_to_receive().await;
-        // Accumulate the avg of all available data
-        let mut humidity_count = 0;
-        let mut humidity = 0.0;
-        let mut temp_count = 0;
-        let mut temperature = 0.0;
-        let mut lux_count = 0;
-        let mut lux = 0.0;
-        // TODO: this could probably be more robust since this expects temp and humidity to come at
-        // the same time
+        // Accumulate the avg of all available readings
+        let mut humidity_sum = 0.0_f32;
+        let mut humidity_count = 0u32;
+        let mut temp_sum = 0.0_f32;
+        let mut temp_count = 0u32;
+        let mut lux_sum = 0.0_f32;
+        let mut lux_count = 0u32;
         while let Ok(reading) = rx.try_receive() {
             match reading {
                 DataType::Temperature(celsius) => {
-                    temperature += celsius.get_as_f();
+                    temp_sum += celsius.get_as_f();
                     temp_count += 1;
                 }
                 DataType::RelativeHumidity(relative_humidity) => {
-                    humidity += relative_humidity.percent();
+                    humidity_sum += relative_humidity.percent();
                     humidity_count += 1;
                 }
                 DataType::Light(in_lux) => {
-                    lux += in_lux.get_as_lux();
+                    lux_sum += in_lux.get_as_lux();
                     lux_count += 1;
                 }
             }
         }
-        display_bw
-            .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
-            .unwrap();
 
-        msg.clear();
-        if temp_count > 0 && humidity_count > 0 {
-            temperature /= temp_count as f32;
-            humidity /= humidity_count as f32;
-            write!(msg, "{:.2}F {:.2}%", temperature, humidity).expect("write to heapless string");
+        let (temperature_f_avg, humidity_avg) = if temp_count > 0 && humidity_count > 0 {
+            (
+                Some(temp_sum / temp_count as f32),
+                Some(humidity_sum / humidity_count as f32),
+            )
         } else {
-            write!(msg, "No Temp Data").expect("write to heapless string");
-        }
+            (None, None)
+        };
 
-        Text::new(
-            &msg,
-            Point::new(5, h1_font.character_size.height as i32),
-            MonoTextStyle::new(&h1_font, BinaryColor::Off),
-        )
-        .draw(&mut display_bw)
-        .unwrap();
-
-        msg.clear();
-        if lux_count > 0 {
-            lux /= lux_count as f32;
-            write!(msg, "{:.2}lux", lux).expect("write to heapless string");
+        let lux_avg = if lux_count > 0 {
+            Some(lux_sum / lux_count as f32)
         } else {
-            write!(msg, "No Data lux").expect("write to heapless string");
-        }
-        Text::new(
-            &msg,
-            Point::new(5, h1_font.character_size.height as i32 * 2),
-            MonoTextStyle::new(&h1_font, BinaryColor::Off),
-        )
-        .draw(&mut display_bw)
-        .unwrap();
+            None
+        };
+
+        let state = DisplayState {
+            temperature_f: temperature_f_avg,
+            humidity_pct: humidity_avg,
+            lux: lux_avg,
+        };
+
+        render_frame(&mut display_bw, &state).unwrap();
         ssd1680.update_bw_frame(display_bw.buffer()).await.unwrap();
         ssd1680.display_frame(&mut Delay).await.unwrap();
         Timer::after(delay_duration).await;

@@ -1,0 +1,11 @@
+[package]
+name = "chlorophyll-ui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+embedded-graphics = "0.8.1"
+heapless = "0.8"
+
+[dev-dependencies]
+embedded-graphics-simulator = { version = "0.6", default-features = false }
