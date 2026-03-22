@@ -2,9 +2,11 @@ use core::fmt::Write;
 
 use embedded_graphics::{
     geometry::Point,
+    mono_font::{MonoTextStyle, ascii::FONT_6X10},
     pixelcolor::BinaryColor,
     prelude::*,
     primitives::{Circle, Line, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, Triangle},
+    text::Text,
 };
 use heapless::String as HeaplessString;
 use u8g2_fonts::{
@@ -87,6 +89,19 @@ fn render_frame<D: DrawTarget<Color = BinaryColor>>(
     }
     font.render_aligned(msg.as_str(), Point::new(TEXT_X, ROW_BASELINES[2]),
         VerticalPosition::Baseline, HorizontalAlignment::Left, color, display).ok();
+
+    if state.watchdog_reset {
+        // Inverted banner at top-right: black bar + white "WDT RST" text
+        Rectangle::new(Point::new(170, 0), Size::new(80, 12))
+            .into_styled(FILLED)
+            .draw(display)?;
+        Text::new(
+            "WDT RST",
+            Point::new(173, 10),
+            MonoTextStyle::new(&FONT_6X10, BinaryColor::On),
+        )
+        .draw(display)?;
+    }
 
     Ok(())
 }

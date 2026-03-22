@@ -29,6 +29,7 @@ use embassy_net::{
 };
 use embassy_rp::gpio::{Input, Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, I2C1, PIO0, SPI0};
+use embassy_rp::watchdog::Watchdog;
 use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_rp::spi;
 use embassy_rp::spi::{Async, Spi};
@@ -106,6 +107,14 @@ async fn cyw43_task(
 #[embassy_executor::task]
 async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'static>>) -> ! {
     runner.run().await
+}
+
+#[embassy_executor::task]
+async fn watchdog_task(mut watchdog: Watchdog) -> ! {
+    loop {
+        Timer::after(Duration::from_secs(4)).await;
+        watchdog.feed();
+    }
 }
 
 /// Handles all sensors that read from the i2c1 shared bus
@@ -267,6 +276,7 @@ async fn run_display<SPI, DC, BSY, RST>(
     busy: BSY,
     rst: RST,
     rx: SensorDataReceiver,
+    was_watchdog_reset: bool,
 ) where
     SPI: AsyncSpiDeviceTrait,
     DC: OutputPin,
@@ -332,10 +342,14 @@ async fn run_display<SPI, DC, BSY, RST>(
             temperature_f: temperature_f_avg,
             humidity_pct: humidity_avg,
             lux: lux_avg,
+            watchdog_reset: was_watchdog_reset,
         };
 
         display.render(&state).unwrap();
-        ssd1680.update_bw_frame(display.inner.buffer()).await.unwrap();
+        ssd1680
+            .update_bw_frame(display.inner.buffer())
+            .await
+            .unwrap();
         ssd1680.display_frame(&mut Delay).await.unwrap();
         Timer::after(delay_duration).await;
     }
@@ -349,8 +363,9 @@ async fn display_task(
     busy: Input<'static>,
     rst: Output<'static>,
     rx: SensorDataReceiver,
+    was_watchdog_reset: bool,
 ) {
-    run_display(spi_device, dc, busy, rst, rx).await;
+    run_display(spi_device, dc, busy, rst, rx, was_watchdog_reset).await;
 }
 
 #[embassy_executor::main]
@@ -365,6 +380,18 @@ async fn main(spawner: Spawner) {
     }
 
     let p = embassy_rp::init(Default::default());
+
+    let mut watchdog = Watchdog::new(p.WATCHDOG);
+    let was_watchdog_reset = watchdog
+        .reset_reason()
+        .map(|r| r == embassy_rp::watchdog::ResetReason::TimedOut)
+        .unwrap_or(false);
+    if was_watchdog_reset {
+        warn!("*** Watchdog reset detected ***");
+    }
+    watchdog.start(Duration::from_secs(8));
+    unwrap!(spawner.spawn(watchdog_task(watchdog)));
+
     let mut rng = RoscRng;
     let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
     let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
@@ -440,7 +467,8 @@ async fn main(spawner: Spawner) {
         Output::new(p.PIN_4, Level::Low),                // dc
         Input::new(p.PIN_1, embassy_rp::gpio::Pull::Up), // busy
         Output::new(p.PIN_0, Level::Low),                // rst
-        SENSOR_DATA_CHANNEL.receiver()
+        SENSOR_DATA_CHANNEL.receiver(),
+        was_watchdog_reset,
     )));
 
     info!("Init I2c Shared bus");

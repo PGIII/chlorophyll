@@ -14,6 +14,7 @@ fn main() {
         temperature_f: Some(72.53),
         humidity_pct: Some(45.12),
         lux: Some(847.3),
+        watchdog_reset: false,
     };
 
     display.render(&state).unwrap();
