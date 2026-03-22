@@ -23,7 +23,7 @@ fn main() {
     display
         .inner
         .to_rgb_output_image(&settings)
-        .save_png("simulate.png")
+        .save_png("target/simulate.png")
         .expect("failed to save PNG");
 
     println!("Saved simulate.png");
