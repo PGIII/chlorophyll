@@ -1,24 +1,29 @@
-use std::io;
-use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
+use std::collections::HashMap;
+use std::net::{Ipv4Addr, SocketAddrV4};
 
-fn main() -> io::Result<()> {
-    // Multicast group and port
-    let multicast_addr = Ipv4Addr::new(239, 0, 0, 1); // Example multicast address
-    let port = 5000;
+use sensor_server::{process_packets, send_discover, MULTICAST_ADDR, PORT};
+use tokio::net::UdpSocket;
+use tracing::*;
 
-    // Bind to any address on the given port
-    let socket_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
-    let socket = UdpSocket::bind(socket_addr)?;
+#[tokio::main]
+async fn main() -> color_eyre::Result<()> {
+    color_eyre::install()?;
+    tracing_subscriber::fmt::init();
 
-    // Join the multicast group on the default interface (0.0.0.0)
-    socket.join_multicast_v4(&multicast_addr, &Ipv4Addr::UNSPECIFIED)?;
+    let socket_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, PORT);
+    let socket = UdpSocket::bind(socket_addr).await?;
+    socket.join_multicast_v4(MULTICAST_ADDR, Ipv4Addr::UNSPECIFIED)?;
+    info!("Listening on {}:{}", MULTICAST_ADDR, PORT);
 
-    println!("Listening for multicast on {}:{}", multicast_addr, port);
+    send_discover(&socket).await?;
 
-    let mut buf = [0u8; 1500];
+    let mut known_devices = HashMap::new();
+    let mut readings = Vec::new();
+
     loop {
-        let (len, src) = socket.recv_from(&mut buf)?;
-        let msg = String::from_utf8_lossy(&buf[..len]);
-        println!("Received from {}: {}", src, msg);
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        if let Err(e) = process_packets(&socket, &mut known_devices, &mut readings).await {
+            error!("process_packets error: {e}");
+        }
     }
 }

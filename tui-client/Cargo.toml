@@ -7,7 +7,8 @@ license = "MIT"
 edition = "2024"
 
 [dependencies]
-chlorophyll-protocol = {path = "../chlorophyll-protocol/"}
+chlorophyll-protocol = { path = "../chlorophyll-protocol/" }
+sensor_server = { path = "../sensor_server" }
 crossterm = { version = "0.28.1", features = ["event-stream"] }
 futures = "0.3.31"
 ratatui = "0.30.0"
