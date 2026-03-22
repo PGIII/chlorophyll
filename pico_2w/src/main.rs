@@ -44,6 +44,7 @@ use embassy_time::{Delay, Duration, Timer};
 use embedded_alloc::LlffHeap as Heap;
 use embedded_graphics::geometry::Point;
 use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::ascii::FONT_10X20;
 use embedded_graphics::mono_font::iso_8859_5::FONT_9X15_BOLD;
 use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
@@ -293,6 +294,7 @@ async fn run_display<SPI, DC, BSY, RST>(
 
     let delay_duration = Duration::from_millis(5000);
     let mut msg: HeaplessString<256> = HeaplessString::new();
+    let h1_font = FONT_10X20;
     loop {
         // Wait for data
         rx.ready_to_receive().await;
@@ -336,8 +338,8 @@ async fn run_display<SPI, DC, BSY, RST>(
 
         Text::new(
             &msg,
-            Point::new(5, 10),
-            MonoTextStyle::new(&FONT_9X15_BOLD, BinaryColor::Off),
+            Point::new(5, h1_font.character_size.height as i32),
+            MonoTextStyle::new(&h1_font, BinaryColor::Off),
         )
         .draw(&mut display_bw)
         .unwrap();
@@ -351,8 +353,8 @@ async fn run_display<SPI, DC, BSY, RST>(
         }
         Text::new(
             &msg,
-            Point::new(5, 25),
-            MonoTextStyle::new(&FONT_9X15_BOLD, BinaryColor::Off),
+            Point::new(5, h1_font.character_size.height as i32 * 2),
+            MonoTextStyle::new(&h1_font, BinaryColor::Off),
         )
         .draw(&mut display_bw)
         .unwrap();
