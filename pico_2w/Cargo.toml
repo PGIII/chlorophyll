@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 # local depends
-ssd1680 = { path = "../ssd1680" }
+ssd1680 = { path = "../ssd1680", features = ["async"] }
 chlorophyll-protocol = { path = "../chlorophyll-protocol/"}
 embassy-embedded-hal = { version = "0.5.0", features = ["defmt"] }
 embassy-sync = { version = "0.7", features = ["defmt"] }

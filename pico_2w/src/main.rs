@@ -8,20 +8,20 @@ extern crate alloc;
 
 mod temp_humidity_sensor;
 
-use alloc::format;
 use chlorophyll_protocol::light::Light;
 use chlorophyll_protocol::postcard::to_allocvec;
 use chlorophyll_protocol::temperature::Temperature;
 use chlorophyll_protocol::*;
 use core::cell::RefCell;
 use core::fmt::Write;
-use core::net::{IpAddr, Ipv4Addr};
+use core::net::Ipv4Addr;
+use core::ops::{Add, AddAssign, Deref, Div};
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
-use defmt::{self, info, println, unwrap, warn};
+use defmt::{info, unwrap, warn};
 use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
 use embassy_executor::Spawner;
-use embassy_futures::yield_now;
+use embassy_futures::select::{Either, select};
 use embassy_net::{IpAddress, Stack};
 use embassy_net::{
     IpEndpoint, StackResources,
@@ -44,6 +44,7 @@ use embassy_time::{Delay, Duration, Timer};
 use embedded_alloc::LlffHeap as Heap;
 use embedded_graphics::geometry::Point;
 use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::ascii::FONT_10X20;
 use embedded_graphics::mono_font::iso_8859_5::FONT_9X15_BOLD;
 use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
@@ -52,7 +53,7 @@ use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal_async::spi::SpiDevice as AsyncSpiDeviceTrait;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use heapless::String as HeaplessString;
-use ssd1680::async_driver::Ssd1680Async;
+use ssd1680::driver::Ssd1680Async;
 use ssd1680::graphics::{Display, Display2in13, DisplayRotation};
 use static_cell::StaticCell;
 use tsl2591_eh_driver::Driver as Tsl2591Driver;
@@ -177,27 +178,29 @@ fn get_unique_id() -> u128 {
     embassy_rp::otp::get_chipid().expect("error fetching chip ID") as u128
 }
 
+/// Handles all network I/O: responds to discovery, then streams sensor data unicast.
+///
+/// Protocol flow:
+///   Server → multicast Discover → we reply DiscoverResponse (unicast, our chip ID in header)
+///   Server → unicast StartStreaming → we send DataReading to server address
+///   Server → unicast StopStreaming  → we stop
 #[embassy_executor::task]
-async fn broadcast_readings(
-    stack: Stack<'static>,
-    rx: SensorDataReceiver,
-    ip: IpAddress,
-    port: u16,
-) {
-    info!("Setting up Socket");
+async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver) {
+    info!("network_task: waiting for DHCP");
     while !stack.is_config_up() {
         Timer::after_millis(100).await;
     }
-    info!("DHCP is now up!");
+    info!("DHCP is up");
 
+    let multicast_ip = IpAddress::Ipv4(Ipv4Addr::new(239, 0, 0, 1));
     stack
-        .join_multicast_group(ip)
+        .join_multicast_group(multicast_ip)
         .expect("Unable to join multicast group");
 
     let mut rx_buffer = [0; 4096];
     let mut tx_buffer = [0; 4096];
-    let mut rx_meta = [PacketMetadata::EMPTY; 4096];
-    let mut tx_meta = [PacketMetadata::EMPTY; 4096];
+    let mut rx_meta = [PacketMetadata::EMPTY; 16];
+    let mut tx_meta = [PacketMetadata::EMPTY; 16];
 
     let mut socket = UdpSocket::new(
         stack,
@@ -206,23 +209,63 @@ async fn broadcast_readings(
         &mut tx_meta,
         &mut tx_buffer,
     );
-    //FIXME: Just retry if this fails
     socket.bind(5000).expect("Error binding to socket");
-    let endpoint = IpEndpoint::new(ip.into(), port);
 
-    // Lastly setup packet builder
     let packet_builder = PacketBuilder::new(get_unique_id());
+    // recv_from returns UdpMetadata; we only need the IpEndpoint inside it.
+    let mut server_addr: Option<IpEndpoint> = None;
+    let mut recv_buf = [0u8; 1500];
+
     loop {
-        let reading = rx.receive().await;
-        let packet = packet_builder.build(PacketCommand::DataReading(reading));
-        let serialized = to_allocvec(&packet).unwrap();
-        match socket.send_to(&serialized, endpoint).await {
-            Ok(()) => {}
-            Err(e) => {
-                warn!("write error: {:?}", e);
-                break;
+        // Wait for either a new server command or a new data reading to send to a server
+        match select(socket.recv_from(&mut recv_buf), rx.receive()).await {
+            Either::First(recv_result) => match recv_result {
+                Ok((len, meta)) => {
+                    let src = meta.endpoint;
+                    match postcard::from_bytes::<Packet>(&recv_buf[..len]) {
+                        Ok(packet) => match packet.command() {
+                            PacketCommand::Discover => {
+                                info!("Discover from {:?}, sending DiscoverResponse", src);
+                                let resp = packet_builder.build(PacketCommand::DiscoverResponse);
+                                match to_allocvec(&resp) {
+                                    Ok(data) => {
+                                        if let Err(e) = socket.send_to(&data, src).await {
+                                            warn!("DiscoverResponse send error: {:?}", e);
+                                        }
+                                    }
+                                    Err(_) => warn!("DiscoverResponse serialize error"),
+                                }
+                            }
+                            PacketCommand::StartStreaming => {
+                                info!("StartStreaming from {:?}", src);
+                                server_addr = Some(src);
+                            }
+                            PacketCommand::StopStreaming => {
+                                info!("StopStreaming");
+                                server_addr = None;
+                            }
+                            _ => {}
+                        },
+                        Err(_) => warn!("packet parse error"),
+                    }
+                }
+                Err(e) => warn!("recv_from error: {:?}", e),
+            },
+            Either::Second(reading) => {
+                if let Some(addr) = server_addr {
+                    let packet = packet_builder.build(PacketCommand::DataReading(reading));
+                    match to_allocvec(&packet) {
+                        Ok(data) => {
+                            if let Err(e) = socket.send_to(&data, addr).await {
+                                warn!("DataReading send error: {:?}", e);
+                            }
+                        }
+                        Err(_) => warn!("DataReading serialize error"),
+                    }
+                }
+                // if server_addr is None, discard the reading
             }
-        };
+        }
     }
 }
 
@@ -238,9 +281,8 @@ async fn run_display<SPI, DC, BSY, RST>(
     BSY: InputPin,
     RST: OutputPin,
 {
-    let disp_interface = display_interface_spi::SPIInterface::new(spi_device, dc);
     let mut delay = Delay;
-    let mut ssd1680 = Ssd1680Async::new(disp_interface, busy, rst, &mut delay)
+    let mut ssd1680 = Ssd1680Async::new(spi_device, busy, dc, rst, &mut delay)
         .await
         .unwrap();
     ssd1680.clear_bw_frame().await.unwrap();
@@ -252,6 +294,7 @@ async fn run_display<SPI, DC, BSY, RST>(
 
     let delay_duration = Duration::from_millis(5000);
     let mut msg: HeaplessString<256> = HeaplessString::new();
+    let h1_font = FONT_10X20;
     loop {
         // Wait for data
         rx.ready_to_receive().await;
@@ -262,7 +305,7 @@ async fn run_display<SPI, DC, BSY, RST>(
         let mut temperature = 0.0;
         let mut lux_count = 0;
         let mut lux = 0.0;
-        // TODO: this could probably be more robust since this expects temp and humidty to come at
+        // TODO: this could probably be more robust since this expects temp and humidity to come at
         // the same time
         while let Ok(reading) = rx.try_receive() {
             match reading {
@@ -278,34 +321,40 @@ async fn run_display<SPI, DC, BSY, RST>(
                     lux += in_lux.get_as_lux();
                     lux_count += 1;
                 }
-                _ => {
-                    //Something we don't care about here
-                }
             }
         }
-        temperature /= temp_count as f32;
-        humidity /= humidity_count as f32;
-        lux /= lux_count as f32;
         display_bw
             .fill_solid(&display_bw.bounding_box(), BinaryColor::On)
             .unwrap();
 
         msg.clear();
-        write!(msg, "{:.2}F {:.2}%", temperature, humidity).expect("write to heapless string");
+        if temp_count > 0 && humidity_count > 0 {
+            temperature /= temp_count as f32;
+            humidity /= humidity_count as f32;
+            write!(msg, "{:.2}F {:.2}%", temperature, humidity).expect("write to heapless string");
+        } else {
+            write!(msg, "No Temp Data").expect("write to heapless string");
+        }
+
         Text::new(
             &msg,
-            Point::new(5, 10),
-            MonoTextStyle::new(&FONT_9X15_BOLD, BinaryColor::Off),
+            Point::new(5, h1_font.character_size.height as i32),
+            MonoTextStyle::new(&h1_font, BinaryColor::Off),
         )
         .draw(&mut display_bw)
         .unwrap();
 
         msg.clear();
-        write!(msg, "{:.2}lux", lux).expect("write to heapless string");
+        if lux_count > 0 {
+            lux /= lux_count as f32;
+            write!(msg, "{:.2}lux", lux).expect("write to heapless string");
+        } else {
+            write!(msg, "No Data lux").expect("write to heapless string");
+        }
         Text::new(
             &msg,
-            Point::new(5, 25),
-            MonoTextStyle::new(&FONT_9X15_BOLD, BinaryColor::Off),
+            Point::new(5, h1_font.character_size.height as i32 * 2),
+            MonoTextStyle::new(&h1_font, BinaryColor::Off),
         )
         .draw(&mut display_bw)
         .unwrap();
@@ -402,16 +451,7 @@ async fn main(spawner: Spawner) {
         }
     }
 
-    // Wait for DHCP, not necessary when using static IP
-    info!("waiting for DHCP...");
-    let multicast_addr = Ipv4Addr::new(239, 0, 0, 1);
-
-    unwrap!(spawner.spawn(broadcast_readings(
-        stack,
-        SENSOR_DATA_CHANNEL.receiver(),
-        multicast_addr.into(),
-        5000
-    )));
+    unwrap!(spawner.spawn(network_task(stack, SENSOR_DATA_CHANNEL.receiver())));
 
     info!("Building display");
     let disp_spi: Spi<'_, _, Async> =

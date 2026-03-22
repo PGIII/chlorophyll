@@ -18,6 +18,14 @@ pub enum DataType {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub enum PacketCommand {
     DataReading(DataType),
+    /// Server → multicast: "who's online?"
+    Discover,
+    /// Pico → server unicast: "I'm here" (device id in packet header)
+    DiscoverResponse,
+    /// Server → pico unicast: "send data to me"
+    StartStreaming,
+    /// Server → pico unicast: "stop sending"
+    StopStreaming,
 }
 
 type SensorID = u128;
