@@ -29,10 +29,10 @@ use embassy_net::{
 };
 use embassy_rp::gpio::{Input, Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, I2C1, PIO0, SPI0};
-use embassy_rp::watchdog::Watchdog;
 use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_rp::spi;
 use embassy_rp::spi::{Async, Spi};
+use embassy_rp::watchdog::Watchdog;
 use embassy_rp::{
     bind_interrupts,
     i2c::{self, InterruptHandler as I2CInterruptHandler},
@@ -270,6 +270,27 @@ async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver) {
     }
 }
 
+#[derive(Debug, Default)]
+struct Averager {
+    sum: f32,
+    count: usize,
+}
+
+impl Averager {
+    fn push(&mut self, val: f32) {
+        self.sum += val;
+        self.count += 1;
+    }
+
+    fn avg(self) -> Option<f32> {
+        if self.count > 0 {
+            Some(self.sum / self.count as f32)
+        } else {
+            None
+        }
+    }
+}
+
 async fn run_display<SPI, DC, BSY, RST>(
     spi_device: SPI,
     dc: DC,
@@ -300,48 +321,28 @@ async fn run_display<SPI, DC, BSY, RST>(
         // Wait for data
         rx.ready_to_receive().await;
         // Accumulate the avg of all available readings
-        let mut humidity_sum = 0.0_f32;
-        let mut humidity_count = 0u32;
-        let mut temp_sum = 0.0_f32;
-        let mut temp_count = 0u32;
-        let mut lux_sum = 0.0_f32;
-        let mut lux_count = 0u32;
+        let mut humidity = Averager::default();
+        let mut temperature = Averager::default();
+        let mut lux = Averager::default();
+
         while let Ok(reading) = rx.try_receive() {
             match reading {
                 DataType::Temperature(celsius) => {
-                    temp_sum += celsius.get_as_f();
-                    temp_count += 1;
+                    temperature.push(celsius.get_as_f());
                 }
                 DataType::RelativeHumidity(relative_humidity) => {
-                    humidity_sum += relative_humidity.percent();
-                    humidity_count += 1;
+                    humidity.push(relative_humidity.percent());
                 }
                 DataType::Light(in_lux) => {
-                    lux_sum += in_lux.get_as_lux();
-                    lux_count += 1;
+                    lux.push(in_lux.get_as_lux());
                 }
             }
         }
 
-        let (temperature_f_avg, humidity_avg) = if temp_count > 0 && humidity_count > 0 {
-            (
-                Some(temp_sum / temp_count as f32),
-                Some(humidity_sum / humidity_count as f32),
-            )
-        } else {
-            (None, None)
-        };
-
-        let lux_avg = if lux_count > 0 {
-            Some(lux_sum / lux_count as f32)
-        } else {
-            None
-        };
-
         let state = DisplayState {
-            temperature_f: temperature_f_avg,
-            humidity_pct: humidity_avg,
-            lux: lux_avg,
+            temperature_f: temperature.avg(),
+            humidity_pct: humidity.avg(),
+            lux: lux.avg(),
             watchdog_reset: was_watchdog_reset,
         };
 
