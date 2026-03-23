@@ -68,9 +68,11 @@ pub async fn get_snapshot() -> Result<SensorSnapshot, ServerFnError> {
     // Build snapshot
     let now = Utc::now();
 
-    let mut sensors: Vec<SensorRow> = s
-        .known_devices
-        .keys()
+    let mut seen_ids: std::collections::HashSet<u128> =
+        s.readings.iter().map(|e| e.sensor_id).collect();
+    seen_ids.extend(s.known_devices.keys());
+    let mut sensors: Vec<SensorRow> = seen_ids
+        .iter()
         .map(|&id| {
             let mut temp_f = None;
             let mut humidity_pct = None;

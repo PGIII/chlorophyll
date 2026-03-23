@@ -63,8 +63,10 @@ pub fn Home() -> Element {
         let d = known_devices.read();
         let now = Utc::now();
 
-        let mut sensors: Vec<SensorRow> = d
-            .keys()
+        let mut seen_ids: std::collections::HashSet<u128> = r.iter().map(|e| e.sensor_id).collect();
+        seen_ids.extend(d.keys());
+        let mut sensors: Vec<SensorRow> = seen_ids
+            .iter()
             .map(|&id| {
                 let mut temp_f = None;
                 let mut humidity_pct = None;

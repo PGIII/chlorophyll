@@ -25,9 +25,12 @@ pub fn LineChart(series: Vec<ChartSeries>, title: String) -> Element {
     let min_y = all_pts.iter().map(|(_, y)| *y).fold(f64::INFINITY, f64::min);
     let max_y = all_pts.iter().map(|(_, y)| *y).fold(f64::NEG_INFINITY, f64::max);
 
-    let y_range = (max_y - min_y).max(1.0);
-    let min_y = min_y - y_range * 0.1;
-    let max_y = max_y + y_range * 0.1;
+    // Enforce a minimum y-range of 10% of the mean value so small fluctuations
+    // don't dominate the whole axis (e.g. lux bouncing between 17 and 18).
+    let mid_y = (min_y + max_y) / 2.0;
+    let y_range = (max_y - min_y).max(mid_y.abs() * 0.10).max(1.0);
+    let min_y = mid_y - y_range / 2.0 - y_range * 0.1;
+    let max_y = mid_y + y_range / 2.0 + y_range * 0.1;
     let x_range = (max_x - min_x).max(1.0);
 
     // Fixed SVG coordinate space; rendered responsively via viewBox
@@ -56,13 +59,26 @@ pub fn LineChart(series: Vec<ChartSeries>, title: String) -> Element {
         .map(|i| ty(min_y + (max_y - min_y) * i as f64 / 4.0))
         .collect();
 
-    // Precompute polyline point strings
+    // Precompute polyline point strings with a 7-point rolling average to
+    // smooth sensor noise without losing the overall trend shape.
     let polylines: Vec<(String, String)> = series
         .iter()
         .filter(|s| s.points.len() >= 2)
         .map(|s| {
-            let pts = s
+            let w = 7_usize;
+            let smoothed: Vec<(f64, f64)> = s
                 .points
+                .iter()
+                .enumerate()
+                .map(|(i, (t, _))| {
+                    let lo = i.saturating_sub(w / 2);
+                    let hi = (i + w / 2 + 1).min(s.points.len());
+                    let avg = s.points[lo..hi].iter().map(|(_, v)| v).sum::<f64>()
+                        / (hi - lo) as f64;
+                    (*t, avg)
+                })
+                .collect();
+            let pts = smoothed
                 .iter()
                 .map(|(t, v)| format!("{:.1},{:.1}", tx(*t), ty(*v)))
                 .collect::<Vec<_>>()
