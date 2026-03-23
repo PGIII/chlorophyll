@@ -1,0 +1,145 @@
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background-color: #0f1116;
+    color: #e5e7eb;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* ── Navbar ────────────────────────────────────────────── */
+
+.navbar {
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    height: 40px;
+    background: #0a0d13;
+    border-bottom: 1px solid #1e2230;
+    flex-shrink: 0;
+}
+
+.navbar-title {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    color: #6d85c6;
+}
+
+/* ── Dashboard layout ──────────────────────────────────── */
+
+.dashboard {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+}
+
+.sidebar {
+    flex-shrink: 0;
+    border-bottom: 1px solid #1e2230;
+    overflow-y: auto;
+    padding: 12px;
+}
+
+.charts {
+    flex: 1;
+    display: flex;
+    flex-direction: row;
+    overflow: hidden;
+}
+
+.chart {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid #1e2230;
+    padding: 8px;
+    overflow: hidden;
+}
+
+.chart:last-child {
+    border-right: none;
+}
+
+/* ── Sensor list ───────────────────────────────────────── */
+
+.section-title {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #6b7280;
+    margin-bottom: 10px;
+}
+
+.no-sensors {
+    color: #6b7280;
+    font-size: 13px;
+    margin-top: 8px;
+}
+
+.sensor-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    font-family: monospace;
+}
+
+.sensor-table th {
+    text-align: left;
+    color: #6b7280;
+    font-weight: 500;
+    padding: 4px 6px;
+    border-bottom: 1px solid #1e2230;
+    font-size: 11px;
+}
+
+.sensor-table td {
+    padding: 5px 6px;
+    border-bottom: 1px solid #111420;
+    color: #d1d5db;
+}
+
+.sensor-table tr:last-child td {
+    border-bottom: none;
+}
+
+.sensor-id {
+    color: #6d85c6;
+    font-size: 11px;
+}
+
+.dim {
+    color: #4b5563;
+}
+
+/* ── Chart ─────────────────────────────────────────────── */
+
+.line-chart {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.chart-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    gap: 6px;
+}
+
+.chart-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #d1d5db;
+}

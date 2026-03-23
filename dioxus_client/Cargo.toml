@@ -1,0 +1,26 @@
+[package]
+name = "dioxus_client"
+version = "0.1.0"
+authors = ["Preston Garrison III <pg3@pg3.dev>"]
+edition = "2021"
+
+[dependencies]
+dioxus = { version = "0.7.1", features = ["router", "fullstack"] }
+serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
+
+# Native-only (desktop + server binary) — not compiled for WASM
+sensor_server = { path = "../sensor_server", optional = true }
+chlorophyll-protocol = { path = "../chlorophyll-protocol", optional = true }
+tokio = { version = "1", features = ["net", "time", "sync"], optional = true }
+chrono = { version = "0.4", optional = true }
+
+# WASM client — async sleep without tokio
+gloo-timers = { version = "0.3", features = ["futures"], optional = true }
+
+[features]
+default = ["desktop"]
+desktop = ["dioxus/desktop", "dep:sensor_server", "dep:chlorophyll-protocol", "dep:tokio", "dep:chrono"]
+web = ["dioxus/web", "dep:gloo-timers"]
+server = ["dioxus/server", "dep:sensor_server", "dep:chlorophyll-protocol", "dep:tokio", "dep:chrono"]
+mobile = ["dioxus/mobile"]
