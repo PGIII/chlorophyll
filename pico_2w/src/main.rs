@@ -8,9 +8,7 @@ extern crate alloc;
 
 mod temp_humidity_sensor;
 
-use chlorophyll_protocol::light::Light;
 use chlorophyll_protocol::postcard::to_allocvec;
-use chlorophyll_protocol::temperature::Temperature;
 use chlorophyll_protocol::*;
 use chlorophyll_ui::display::{DisplayState, SensorDisplay};
 use chlorophyll_ui::displays::binary_250x122::Display250x122Binary;
