@@ -88,7 +88,7 @@ pub async fn get_snapshot() -> Result<SensorSnapshot, ServerFnError> {
                 }
                 match &entry.data_type {
                     DataType::Temperature(t) if temp_f.is_none() => {
-                        temp_f = Some(t.get_as_f() * 9.0 / 5.0 + 32.0);
+                        temp_f = Some(t.get_as_f());
                     }
                     DataType::RelativeHumidity(h) if humidity_pct.is_none() => {
                         humidity_pct = Some(h.percent());
@@ -119,7 +119,7 @@ pub async fn get_snapshot() -> Result<SensorSnapshot, ServerFnError> {
         .iter()
         .filter_map(|e| {
             if let DataType::Temperature(t) = &e.data_type {
-                Some((e.timestamp.timestamp(), t.get_as_f() * 9.0 / 5.0 + 32.0))
+                Some((e.timestamp.timestamp(), t.get_as_f()))
             } else {
                 None
             }
