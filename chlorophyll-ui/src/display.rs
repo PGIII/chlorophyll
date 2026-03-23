@@ -1,8 +1,10 @@
+use chlorophyll_protocol::{humidity::RelativeHumidity, light::Lux, temperature::Celsius};
+
 /// Pre-averaged sensor values for one display frame.
 pub struct DisplayState {
-    pub temperature_f: Option<f32>,
-    pub humidity_pct: Option<f32>,
-    pub lux: Option<f32>,
+    pub temperature: Option<Celsius>,
+    pub humidity: Option<RelativeHumidity>,
+    pub lux: Option<Lux>,
     /// Set to `true` when the device detected it was previously reset by the watchdog.
     pub watchdog_reset: bool,
 }

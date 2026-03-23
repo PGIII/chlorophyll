@@ -270,24 +270,28 @@ async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver) {
     }
 }
 
-#[derive(Debug, Default)]
-struct Averager {
-    sum: f32,
+struct Averager<T> {
+    sum: T,
     count: usize,
 }
 
-impl Averager {
-    fn push(&mut self, val: f32) {
-        self.sum += val;
+impl<T: Default> Default for Averager<T> {
+    fn default() -> Self {
+        Self { sum: T::default(), count: 0 }
+    }
+}
+
+impl<T> Averager<T>
+where
+    T: core::ops::Add<Output = T> + core::ops::Div<usize, Output = T> + Default + Copy,
+{
+    fn push(&mut self, val: T) {
+        self.sum = self.sum + val;
         self.count += 1;
     }
 
-    fn avg(self) -> Option<f32> {
-        if self.count > 0 {
-            Some(self.sum / self.count as f32)
-        } else {
-            None
-        }
+    fn avg(self) -> Option<T> {
+        if self.count > 0 { Some(self.sum / self.count) } else { None }
     }
 }
 
@@ -327,21 +331,15 @@ async fn run_display<SPI, DC, BSY, RST>(
 
         while let Ok(reading) = rx.try_receive() {
             match reading {
-                DataType::Temperature(celsius) => {
-                    temperature.push(celsius.get_as_f());
-                }
-                DataType::RelativeHumidity(relative_humidity) => {
-                    humidity.push(relative_humidity.percent());
-                }
-                DataType::Light(in_lux) => {
-                    lux.push(in_lux.get_as_lux());
-                }
+                DataType::Temperature(celsius) => temperature.push(celsius),
+                DataType::RelativeHumidity(relative_humidity) => humidity.push(relative_humidity),
+                DataType::Light(in_lux) => lux.push(in_lux),
             }
         }
 
         let state = DisplayState {
-            temperature_f: temperature.avg(),
-            humidity_pct: humidity.avg(),
+            temperature: temperature.avg(),
+            humidity: humidity.avg(),
             lux: lux.avg(),
             watchdog_reset: was_watchdog_reset,
         };

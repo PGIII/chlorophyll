@@ -15,6 +15,8 @@ use u8g2_fonts::{
     types::{FontColor, HorizontalAlignment, VerticalPosition},
 };
 
+use chlorophyll_protocol::{light::Light, temperature::Temperature};
+
 use crate::display::{DisplayState, SensorDisplay};
 
 // Row layout: 3 rows of 40px each within the 122px-tall display.
@@ -63,8 +65,8 @@ fn render_frame<D: DrawTarget<Color = BinaryColor>>(
 
     // Row 0 — temperature
     draw_thermometer(display, Point::new(3, ROW_BASELINES[0] - ROW_HEIGHT + 2))?;
-    match state.temperature_f {
-        Some(t) => { let _ = write!(msg, "{:.1}F", t); }
+    match &state.temperature {
+        Some(t) => { let _ = write!(msg, "{:.1}F", t.get_as_f()); }
         None    => { let _ = write!(msg, "--F"); }
     }
     font.render_aligned(msg.as_str(), Point::new(TEXT_X, ROW_BASELINES[0]),
@@ -73,8 +75,8 @@ fn render_frame<D: DrawTarget<Color = BinaryColor>>(
     // Row 1 — humidity
     msg.clear();
     draw_droplet(display, Point::new(3, ROW_BASELINES[1] - ROW_HEIGHT + 2))?;
-    match state.humidity_pct {
-        Some(h) => { let _ = write!(msg, "{:.1}%", h); }
+    match &state.humidity {
+        Some(h) => { let _ = write!(msg, "{:.1}%", h.percent()); }
         None    => { let _ = write!(msg, "--%"); }
     }
     font.render_aligned(msg.as_str(), Point::new(TEXT_X, ROW_BASELINES[1]),
@@ -83,8 +85,8 @@ fn render_frame<D: DrawTarget<Color = BinaryColor>>(
     // Row 2 — lux
     msg.clear();
     draw_sun(display, Point::new(3, ROW_BASELINES[2] - ROW_HEIGHT + 2))?;
-    match state.lux {
-        Some(l) => { let _ = write!(msg, "{:.0}lx", l); }
+    match &state.lux {
+        Some(l) => { let _ = write!(msg, "{:.0}lx", l.get_as_lux()); }
         None    => { let _ = write!(msg, "--lx"); }
     }
     font.render_aligned(msg.as_str(), Point::new(TEXT_X, ROW_BASELINES[2]),

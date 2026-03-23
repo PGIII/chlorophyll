@@ -5,7 +5,7 @@ pub trait Light {
     fn get_as_foot_candles(&self) -> f32;
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Clone, Copy)]
 pub struct Lux {
     value: f32,
 }
@@ -48,6 +48,20 @@ impl Light for FootCandle {
     fn get_as_foot_candles(&self) -> f32 {
         self.value
     }
+}
+
+impl Default for Lux {
+    fn default() -> Self { Self { value: 0.0 } }
+}
+
+impl core::ops::Add for Lux {
+    type Output = Lux;
+    fn add(self, rhs: Lux) -> Lux { Lux { value: self.value + rhs.value } }
+}
+
+impl core::ops::Div<usize> for Lux {
+    type Output = Lux;
+    fn div(self, rhs: usize) -> Lux { Lux { value: self.value / rhs as f32 } }
 }
 
 impl From<FootCandle> for Lux {

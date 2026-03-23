@@ -1,3 +1,4 @@
+use chlorophyll_protocol::{humidity::RelativeHumidity, light::Lux, temperature::Celsius};
 use chlorophyll_ui::display::{DisplayState, SensorDisplay};
 use chlorophyll_ui::displays::binary_250x122::Display250x122Binary;
 use embedded_graphics::pixelcolor::BinaryColor;
@@ -11,9 +12,9 @@ fn main() {
     );
 
     let state = DisplayState {
-        temperature_f: Some(72.53),
-        humidity_pct: Some(45.12),
-        lux: Some(847.3),
+        temperature: Some(Celsius::new(22.5)),
+        humidity: Some(RelativeHumidity::new(45.12)),
+        lux: Some(Lux::new(847.3)),
         watchdog_reset: false,
     };
 

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chlorophyll-protocol = { path = "../chlorophyll-protocol" }
 embedded-graphics = "0.8.1"
 heapless = "0.8"
 u8g2-fonts = "0.7"
