@@ -5,9 +5,10 @@ use crate::event::{AppEvent, Event, EventHandler};
 use crate::log_widget::LogState;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
-use sensor_server::{
-    process_packets, send_discover, DataEntry, MULTICAST_ADDR, PORT, REDISCOVER_TICKS,
-};
+use sensor_server::{process_packets, DataEntry, MULTICAST_ADDR, PORT};
+
+/// Re-join the multicast group every ~10 s to send a fresh IGMP membership report.
+const REJOIN_TICKS: u64 = 300;
 use tokio::net::UdpSocket;
 use tracing::*;
 
@@ -129,10 +130,14 @@ impl App {
         self.tick_count = self.tick_count.wrapping_add(1);
 
         if let Some(sock) = &self.socket {
-            // Re-discover periodically so we catch any new sensors
-            if self.tick_count % REDISCOVER_TICKS == 0 {
-                if let Err(e) = send_discover(sock).await {
-                    error!("Rediscover send error: {e}");
+            // Periodically leave and rejoin the multicast group to send a fresh IGMP
+            // membership report. A plain join on an already-joined socket is rejected
+            // with EADDRINUSE; leave+join is the only way to trigger a new report and
+            // prevent the router from timing out our group membership.
+            if self.tick_count % REJOIN_TICKS == 0 {
+                sock.leave_multicast_v4(MULTICAST_ADDR, Ipv4Addr::UNSPECIFIED).ok();
+                if let Err(e) = sock.join_multicast_v4(MULTICAST_ADDR, Ipv4Addr::UNSPECIFIED) {
+                    error!("Failed to rejoin multicast group: {e}");
                 }
             }
 
@@ -151,9 +156,6 @@ impl App {
                         return;
                     }
                     info!("Joined multicast {}:{}", MULTICAST_ADDR, PORT);
-                    if let Err(e) = send_discover(&sock).await {
-                        error!("Initial Discover send error: {e}");
-                    }
                     self.socket = Some(sock);
                 }
                 Err(e) => {

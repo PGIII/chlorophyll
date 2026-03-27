@@ -177,12 +177,11 @@ fn get_unique_id() -> u128 {
     embassy_rp::otp::get_chipid().expect("error fetching chip ID") as u128
 }
 
-/// Handles all network I/O: responds to discovery, then streams sensor data unicast.
+/// Handles all network I/O: responds to discovery, then streams sensor data multicast.
 ///
 /// Protocol flow:
 ///   Server → multicast Discover → we reply DiscoverResponse (unicast, our chip ID in header)
-///   Server → unicast StartStreaming → we send DataReading to server address
-///   Server → unicast StopStreaming  → we stop
+///   DataReading packets are multicast to 239.0.0.1:5000 so every server receives them
 #[embassy_executor::task]
 async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver) {
     info!("network_task: waiting for DHCP");
@@ -211,12 +210,10 @@ async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver) {
     socket.bind(5000).expect("Error binding to socket");
 
     let packet_builder = PacketBuilder::new(get_unique_id());
-    // recv_from returns UdpMetadata; we only need the IpEndpoint inside it.
-    let mut server_addr: Option<IpEndpoint> = None;
+    let multicast_ep = IpEndpoint::new(IpAddress::Ipv4(Ipv4Addr::new(239, 0, 0, 1)), 5000);
     let mut recv_buf = [0u8; 1500];
 
     loop {
-        // Wait for either a new server command or a new data reading to send to a server
         match select(socket.recv_from(&mut recv_buf), rx.receive()).await {
             Either::First(recv_result) => match recv_result {
                 Ok((len, meta)) => {
@@ -235,14 +232,6 @@ async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver) {
                                     Err(_) => warn!("DiscoverResponse serialize error"),
                                 }
                             }
-                            PacketCommand::StartStreaming => {
-                                info!("StartStreaming from {:?}", src);
-                                server_addr = Some(src);
-                            }
-                            PacketCommand::StopStreaming => {
-                                info!("StopStreaming");
-                                server_addr = None;
-                            }
                             _ => {}
                         },
                         Err(_) => warn!("packet parse error"),
@@ -251,18 +240,15 @@ async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver) {
                 Err(e) => warn!("recv_from error: {:?}", e),
             },
             Either::Second(reading) => {
-                if let Some(addr) = server_addr {
-                    let packet = packet_builder.build(PacketCommand::DataReading(reading));
-                    match to_allocvec(&packet) {
-                        Ok(data) => {
-                            if let Err(e) = socket.send_to(&data, addr).await {
-                                warn!("DataReading send error: {:?}", e);
-                            }
+                let packet = packet_builder.build(PacketCommand::DataReading(reading));
+                match to_allocvec(&packet) {
+                    Ok(data) => {
+                        if let Err(e) = socket.send_to(&data, multicast_ep).await {
+                            warn!("DataReading send error: {:?}", e);
                         }
-                        Err(_) => warn!("DataReading serialize error"),
                     }
+                    Err(_) => warn!("DataReading serialize error"),
                 }
-                // if server_addr is None, discard the reading
             }
         }
     }
