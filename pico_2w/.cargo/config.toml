@@ -6,5 +6,8 @@ runner = "probe-rs run --chip RP235x"
 [build]
 target = "thumbv8m.main-none-eabihf"
 
+[alias]
+sz = "bloat --target thumbv8m.main-none-eabihf"
+
 [env]
 DEFMT_LOG = "info"

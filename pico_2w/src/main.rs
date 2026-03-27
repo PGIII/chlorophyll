@@ -195,26 +195,27 @@ async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver) {
         .join_multicast_group(multicast_ip)
         .expect("Unable to join multicast group");
 
-    let mut rx_buffer = [0; 4096];
-    let mut tx_buffer = [0; 4096];
-    let mut rx_meta = [PacketMetadata::EMPTY; 16];
-    let mut tx_meta = [PacketMetadata::EMPTY; 16];
+    static RX_BUFFER: StaticCell<[u8; 4096]> = StaticCell::new();
+    static TX_BUFFER: StaticCell<[u8; 4096]> = StaticCell::new();
+    static RX_META: StaticCell<[PacketMetadata; 16]> = StaticCell::new();
+    static TX_META: StaticCell<[PacketMetadata; 16]> = StaticCell::new();
+    static RECV_BUF: StaticCell<[u8; 1500]> = StaticCell::new();
 
-    let mut socket = UdpSocket::new(
-        stack,
-        &mut rx_meta,
-        &mut rx_buffer,
-        &mut tx_meta,
-        &mut tx_buffer,
-    );
+    let rx_buffer = RX_BUFFER.init([0; 4096]);
+    let tx_buffer = TX_BUFFER.init([0; 4096]);
+    let rx_meta = RX_META.init([PacketMetadata::EMPTY; 16]);
+    let tx_meta = TX_META.init([PacketMetadata::EMPTY; 16]);
+    let recv_buf = RECV_BUF.init([0; 1500]);
+
+
+    let mut socket = UdpSocket::new(stack, rx_meta, rx_buffer, tx_meta, tx_buffer);
     socket.bind(5000).expect("Error binding to socket");
 
     let packet_builder = PacketBuilder::new(get_unique_id());
     let multicast_ep = IpEndpoint::new(IpAddress::Ipv4(Ipv4Addr::new(239, 0, 0, 1)), 5000);
-    let mut recv_buf = [0u8; 1500];
 
     loop {
-        match select(socket.recv_from(&mut recv_buf), rx.receive()).await {
+        match select(socket.recv_from(recv_buf), rx.receive()).await {
             Either::First(recv_result) => match recv_result {
                 Ok((len, meta)) => {
                     let src = meta.endpoint;
@@ -261,7 +262,10 @@ struct Averager<T> {
 
 impl<T: Default> Default for Averager<T> {
     fn default() -> Self {
-        Self { sum: T::default(), count: 0 }
+        Self {
+            sum: T::default(),
+            count: 0,
+        }
     }
 }
 
@@ -275,7 +279,11 @@ where
     }
 
     fn avg(self) -> Option<T> {
-        if self.count > 0 { Some(self.sum / self.count) } else { None }
+        if self.count > 0 {
+            Some(self.sum / self.count)
+        } else {
+            None
+        }
     }
 }
 
@@ -292,15 +300,19 @@ async fn run_display<SPI, DC, BSY, RST>(
     BSY: InputPin,
     RST: OutputPin,
 {
+    static WHITE: [u8; (ssd1680::WIDTH as usize / 8) * ssd1680::HEIGHT as usize] =
+        [0xFF; (ssd1680::WIDTH as usize / 8) * ssd1680::HEIGHT as usize];
+
+
     let mut delay = Delay;
     let mut ssd1680 = Ssd1680Async::new(spi_device, busy, dc, rst, &mut delay)
         .await
         .unwrap();
-    ssd1680.clear_bw_frame().await.unwrap();
+    ssd1680.full_refresh(&WHITE, &mut delay).await.unwrap();
     let mut display = Display250x122Binary::new(Display2in13::bw());
     display.inner.set_rotation(DisplayRotation::Rotate270);
 
-    let delay_duration = Duration::from_millis(5000);
+    let delay_duration = Duration::from_millis(1);
 
     // Main render loop
     // every 5ms, accumulate all available sensors data
@@ -330,10 +342,9 @@ async fn run_display<SPI, DC, BSY, RST>(
 
         display.render(&state).unwrap();
         ssd1680
-            .update_bw_frame(display.inner.buffer())
+            .display_frame(display.inner.buffer(), &mut Delay)
             .await
             .unwrap();
-        ssd1680.display_frame(&mut Delay).await.unwrap();
         Timer::after(delay_duration).await;
     }
 }
