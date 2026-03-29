@@ -21,11 +21,8 @@ pub enum PacketCommand {
     /// Server → multicast: "who's online?"
     Discover,
     /// Pico → server unicast: "I'm here" (device id in packet header)
+    /// Pico always streams DataReading to multicast; no StartStreaming needed.
     DiscoverResponse,
-    /// Server → pico unicast: "send data to me"
-    StartStreaming,
-    /// Server → pico unicast: "stop sending"
-    StopStreaming,
 }
 
 type SensorID = u128;

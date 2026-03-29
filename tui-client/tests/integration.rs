@@ -1,8 +1,8 @@
-/// Integration test for the multicast discovery + unicast streaming protocol.
+/// Integration test for the multicast discovery + streaming protocol.
 ///
 /// The test uses ephemeral loopback ports so it works in any environment
 /// (CI, Docker, machines without a physical NIC).  The protocol state machine
-/// — Discover → DiscoverResponse → StartStreaming → DataReading — is exercised
+/// — Discover → DiscoverResponse → DataReading (multicast) — is exercised
 /// end-to-end; only the multicast *delivery* step is replaced with a direct
 /// unicast send, which is the only part that depends on kernel/NIC multicast
 /// support.
@@ -13,7 +13,7 @@ use chlorophyll_protocol::postcard::{from_bytes, to_allocvec};
 use chlorophyll_protocol::temperature::{Celsius, Temperature};
 use chlorophyll_protocol::{DataType, Packet, PacketBuilder, PacketCommand};
 use tokio::net::UdpSocket;
-use tui_client::app::{DataEntry, process_packets};
+use sensor_server::{DataEntry, process_packets};
 
 const FAKE_DEVICE_ID: u128 = 0xdeadbeef_cafe1234;
 const N_READINGS: usize = 5;
@@ -29,28 +29,19 @@ async fn test_discovery_and_streaming() {
 
     let device_handle = tokio::spawn(async move {
         let mut buf = [0u8; 1500];
-        loop {
-            let (len, src) = device_socket.recv_from(&mut buf).await.unwrap();
-            let packet = from_bytes::<Packet>(&buf[..len]).unwrap();
-            match packet.command() {
-                PacketCommand::Discover => {
-                    // Unicast DiscoverResponse back to whoever asked.
-                    let resp = packet_builder.build(PacketCommand::DiscoverResponse);
-                    let data = to_allocvec(&resp).unwrap();
-                    device_socket.send_to(&data, src).await.unwrap();
-                }
-                PacketCommand::StartStreaming => {
-                    // Send N temperature readings back to the server.
-                    for i in 0..N_READINGS {
-                        let reading = DataType::Temperature(Celsius::new(20.0 + i as f32));
-                        let pkt = packet_builder.build(PacketCommand::DataReading(reading));
-                        let data = to_allocvec(&pkt).unwrap();
-                        device_socket.send_to(&data, src).await.unwrap();
-                    }
-                    break;
-                }
-                _ => {}
-            }
+        let (len, src) = device_socket.recv_from(&mut buf).await.unwrap();
+        let packet = from_bytes::<Packet>(&buf[..len]).unwrap();
+        assert_eq!(packet.command(), &PacketCommand::Discover);
+
+        // Reply with DiscoverResponse, then immediately stream DataReadings
+        // back to the server (simulating multicast with a direct unicast send).
+        let resp = packet_builder.build(PacketCommand::DiscoverResponse);
+        device_socket.send_to(&to_allocvec(&resp).unwrap(), src).await.unwrap();
+
+        for i in 0..N_READINGS {
+            let reading = DataType::Temperature(Celsius::new(20.0 + i as f32));
+            let pkt = packet_builder.build(PacketCommand::DataReading(reading));
+            device_socket.send_to(&to_allocvec(&pkt).unwrap(), src).await.unwrap();
         }
     });
 
@@ -63,8 +54,7 @@ async fn test_discovery_and_streaming() {
     // Send Discover directly to the fake device (unicast stand-in for the
     // multicast broadcast that send_discover() would normally use in prod).
     let discover = Packet::new(PacketCommand::Discover, 0);
-    let data = to_allocvec(&discover).unwrap();
-    server_socket.send_to(&data, device_addr).await.unwrap();
+    server_socket.send_to(&to_allocvec(&discover).unwrap(), device_addr).await.unwrap();
 
     // Poll until we have N readings (or 5 s timeout).
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);

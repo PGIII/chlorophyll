@@ -106,6 +106,15 @@ async fn main() -> color_eyre::Result<()> {
     let show_logs = args.show_logs && !args.hide_logs;
 
     initialize_logging()?;
+
+    // Ensure the terminal is always restored on panic, otherwise raw mode stays
+    // active and the terminal appears frozen with all input consumed but unhandled.
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        ratatui::restore();
+        original_hook(info);
+    }));
+
     let terminal = ratatui::init();
     let log_state = LogState::new(show_logs);
     let result = App::new(log_state).run(terminal).await;

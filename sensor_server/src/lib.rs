@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
-use chlorophyll_protocol::postcard::{from_bytes, to_allocvec};
+use chlorophyll_protocol::postcard::from_bytes;
 use chlorophyll_protocol::{DataType, Packet, PacketCommand};
 use chrono::{DateTime, Utc};
 use tokio::net::UdpSocket;
@@ -24,6 +24,7 @@ pub struct DataEntry {
 
 /// Send a `Discover` packet to the multicast group to find any online sensors
 pub async fn send_discover(socket: &UdpSocket) -> color_eyre::Result<()> {
+    use chlorophyll_protocol::postcard::to_allocvec;
     let packet = Packet::new(PacketCommand::Discover, 0);
     let data = to_allocvec(&packet).map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
     let dest = SocketAddrV4::new(MULTICAST_ADDR, PORT);
@@ -34,7 +35,7 @@ pub async fn send_discover(socket: &UdpSocket) -> color_eyre::Result<()> {
 
 /// Drain all pending inbound packets and handle protocol logic.
 ///
-/// - `DiscoverResponse` → record device, unicast `StartStreaming`
+/// - `DiscoverResponse` → record device (pico streams to multicast automatically)
 /// - `DataReading`      → append to `readings`
 pub async fn process_packets(
     socket: &UdpSocket,
@@ -50,11 +51,6 @@ pub async fn process_packets(
                         let id = packet.id();
                         info!("DiscoverResponse from {} (id={:x})", src, id);
                         known_devices.insert(id, src);
-                        let start = Packet::new(PacketCommand::StartStreaming, 0);
-                        let data =
-                            to_allocvec(&start).map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
-                        socket.send_to(&data, src).await?;
-                        info!("Sent StartStreaming to {}", src);
                     }
                     PacketCommand::DataReading(data_type) => {
                         let now = Utc::now();

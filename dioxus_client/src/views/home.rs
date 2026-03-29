@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::components::{ChartSeries, LineChart, SensorList};
-use crate::types::SensorSnapshot;
+use crate::types::{SensorRow, SensorSnapshot};
 
 // ── Desktop ──────────────────────────────────────────────────────────────────
 // Direct UDP networking via a background coroutine; no server process needed.

@@ -8,12 +8,14 @@ extern crate alloc;
 
 mod temp_humidity_sensor;
 
+use alloc::sync::Arc;
 use chlorophyll_protocol::postcard::to_allocvec;
 use chlorophyll_protocol::*;
 use chlorophyll_ui::display::{DisplayState, SensorDisplay};
 use chlorophyll_ui::displays::binary_250x122::Display250x122Binary;
 use core::cell::RefCell;
 use core::net::Ipv4Addr;
+use core::sync::atomic::{AtomicBool, Ordering};
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use defmt::{info, unwrap, warn};
@@ -93,6 +95,11 @@ bind_interrupts!(struct Irqs {
 });
 
 static SENSOR_DATA_CHANNEL: SensorDataChannel = Channel::new();
+#[derive(Debug, Default)]
+struct State {
+    pub is_fast_mode: AtomicBool,
+    pub was_reset_by_watchdog: AtomicBool,
+}
 
 // Funcs
 #[embassy_executor::task]
@@ -183,7 +190,7 @@ fn get_unique_id() -> u128 {
 ///   Server → multicast Discover → we reply DiscoverResponse (unicast, our chip ID in header)
 ///   DataReading packets are multicast to 239.0.0.1:5000 so every server receives them
 #[embassy_executor::task]
-async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver) {
+async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, shared_state: Arc<State>) {
     info!("network_task: waiting for DHCP");
     while !stack.is_config_up() {
         Timer::after_millis(100).await;
@@ -206,7 +213,6 @@ async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver) {
     let rx_meta = RX_META.init([PacketMetadata::EMPTY; 16]);
     let tx_meta = TX_META.init([PacketMetadata::EMPTY; 16]);
     let recv_buf = RECV_BUF.init([0; 1500]);
-
 
     let mut socket = UdpSocket::new(stack, rx_meta, rx_buffer, tx_meta, tx_buffer);
     socket.bind(5000).expect("Error binding to socket");
@@ -293,7 +299,7 @@ async fn run_display<SPI, DC, BSY, RST>(
     busy: BSY,
     rst: RST,
     rx: SensorDataReceiver,
-    was_watchdog_reset: bool,
+    state: Arc<State>,
 ) where
     SPI: AsyncSpiDeviceTrait,
     DC: OutputPin,
@@ -302,7 +308,6 @@ async fn run_display<SPI, DC, BSY, RST>(
 {
     static WHITE: [u8; (ssd1680::WIDTH as usize / 8) * ssd1680::HEIGHT as usize] =
         [0xFF; (ssd1680::WIDTH as usize / 8) * ssd1680::HEIGHT as usize];
-
 
     let mut delay = Delay;
     let mut ssd1680 = Ssd1680Async::new(spi_device, busy, dc, rst, &mut delay)
@@ -337,7 +342,7 @@ async fn run_display<SPI, DC, BSY, RST>(
             temperature: temperature.avg(),
             humidity: humidity.avg(),
             lux: lux.avg(),
-            watchdog_reset: was_watchdog_reset,
+            watchdog_reset: state.was_reset_by_watchdog.load(Ordering::Relaxed),
         };
 
         display.render(&state).unwrap();
@@ -357,9 +362,9 @@ async fn display_task(
     busy: Input<'static>,
     rst: Output<'static>,
     rx: SensorDataReceiver,
-    was_watchdog_reset: bool,
+    state: Arc<State>,
 ) {
-    run_display(spi_device, dc, busy, rst, rx, was_watchdog_reset).await;
+    run_display(spi_device, dc, busy, rst, rx, state).await;
 }
 
 #[embassy_executor::main]
@@ -375,14 +380,22 @@ async fn main(spawner: Spawner) {
 
     let p = embassy_rp::init(Default::default());
 
+    let state = Arc::new(State::default());
+
     let mut watchdog = Watchdog::new(p.WATCHDOG);
-    let was_watchdog_reset = watchdog
+    let was_reset = watchdog
         .reset_reason()
         .map(|r| r == embassy_rp::watchdog::ResetReason::TimedOut)
         .unwrap_or(false);
-    if was_watchdog_reset {
+
+    state
+        .was_reset_by_watchdog
+        .store(was_reset, Ordering::Relaxed);
+
+    if was_reset {
         warn!("*** Watchdog reset detected ***");
     }
+
     watchdog.start(Duration::from_secs(8));
     unwrap!(spawner.spawn(watchdog_task(watchdog)));
 
@@ -390,6 +403,8 @@ async fn main(spawner: Spawner) {
     let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
     let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
 
+    //TODO: I think there is a cleaner way to do this ... with a feature flag ?
+    //is there a way to detect if we have it flashed or not ?
     // To make flashing faster for development, you may want to flash the firmwares independently
     // at hardcoded addresses, instead of baking them into the program with `include_bytes!`:
     //     probe-rs download ../../cyw43-firmware/43439A0.bin --binary-format bin --chip RP2040 --base-address 0x10100000
@@ -411,9 +426,9 @@ async fn main(spawner: Spawner) {
         p.DMA_CH0,
     );
 
-    static STATE: StaticCell<cyw43::State> = StaticCell::new();
-    let state = STATE.init(cyw43::State::new());
-    let (net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
+    static NETWORK_STATE: StaticCell<cyw43::State> = StaticCell::new();
+    let network_state = NETWORK_STATE.init(cyw43::State::new());
+    let (net_device, mut control, runner) = cyw43::new(network_state, pwr, spi, fw).await;
     unwrap!(spawner.spawn(cyw43_task(runner)));
 
     control.init(clm).await;
@@ -449,7 +464,11 @@ async fn main(spawner: Spawner) {
         }
     }
 
-    unwrap!(spawner.spawn(network_task(stack, SENSOR_DATA_CHANNEL.receiver())));
+    unwrap!(spawner.spawn(network_task(
+        stack,
+        SENSOR_DATA_CHANNEL.receiver(),
+        state.clone()
+    )));
 
     info!("Building display");
     let disp_spi: Spi<'_, _, Async> =
@@ -462,7 +481,7 @@ async fn main(spawner: Spawner) {
         Input::new(p.PIN_1, embassy_rp::gpio::Pull::Up), // busy
         Output::new(p.PIN_0, Level::Low),                // rst
         SENSOR_DATA_CHANNEL.receiver(),
-        was_watchdog_reset,
+        state.clone()
     )));
 
     info!("Init I2c Shared bus");
