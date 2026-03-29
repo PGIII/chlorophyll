@@ -1,5 +1,7 @@
 #![warn(clippy::pedantic)]
 
+pub mod db;
+
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
