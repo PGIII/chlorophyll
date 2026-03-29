@@ -1,4 +1,5 @@
 #![no_std]
+#![warn(clippy::pedantic)]
 
 use core::sync::atomic::AtomicBool;
 

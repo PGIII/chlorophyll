@@ -4,6 +4,7 @@
 
 #![no_std]
 #![no_main]
+#![warn(clippy::pedantic)]
 extern crate alloc;
 
 mod temp_humidity_sensor;

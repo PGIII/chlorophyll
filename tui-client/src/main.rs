@@ -1,3 +1,5 @@
+#![warn(clippy::pedantic)]
+
 use tui_client::app::App;
 use tui_client::log_widget::LogState;
 use tui_client::tracing_layer;

@@ -1,3 +1,5 @@
+#![warn(clippy::pedantic)]
+
 use dioxus::prelude::*;
 use views::{Home, Navbar};
 

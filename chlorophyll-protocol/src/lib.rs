@@ -1,4 +1,5 @@
 #![no_std]
+#![warn(clippy::pedantic)]
 
 pub mod temperature;
 pub mod humidity;
