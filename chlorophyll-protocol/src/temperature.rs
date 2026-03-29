@@ -20,6 +20,7 @@ pub trait Temperature {
 }
 
 impl Celsius {
+    #[must_use] 
     pub fn new(value: f32) -> Self {
         Self { value }
     }

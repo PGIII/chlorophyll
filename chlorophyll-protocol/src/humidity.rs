@@ -8,11 +8,13 @@ pub struct RelativeHumidity {
 }
 
 impl RelativeHumidity {
+    #[must_use] 
     pub fn new(percent: f32) -> Self {
         Self { percent }
     }
 
     /// Return relative humidity as a percent
+    #[must_use] 
     pub fn percent(&self) -> f32 {
         self.percent
     }

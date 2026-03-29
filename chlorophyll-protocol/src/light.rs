@@ -16,12 +16,14 @@ pub struct FootCandle {
 }
 
 impl Lux {
+    #[must_use] 
     pub fn new(value: f32) -> Self {
         Self { value }
     }
 }
 
 impl FootCandle {
+    #[must_use] 
     pub fn new(value: f32) -> Self {
         Self { value }
     }

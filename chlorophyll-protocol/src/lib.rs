@@ -22,7 +22,7 @@ pub enum PacketCommand {
     /// Server → multicast: "who's online?"
     Discover,
     /// Pico → server unicast: "I'm here" (device id in packet header)
-    /// Pico always streams DataReading to multicast; no StartStreaming needed.
+    /// Pico always streams `DataReading` to multicast; no `StartStreaming` needed.
     DiscoverResponse,
 }
 
@@ -35,11 +35,14 @@ pub struct Packet {
     id: SensorID, 
 }
 impl Packet {
+    #[must_use] 
     pub fn new(command: PacketCommand, id: SensorID) -> Self {
         Self { command, id }
     }
 
+    #[must_use] 
     pub fn command(&self) -> &PacketCommand { &self.command }
+    #[must_use] 
     pub fn id(&self) -> SensorID { self.id }
 }
 
@@ -50,10 +53,12 @@ pub struct PacketBuilder {
 }
 
 impl PacketBuilder {
+    #[must_use] 
     pub fn new(id: SensorID) -> Self {
         Self { id }
     }
 
+    #[must_use] 
     pub fn build(&self, command: PacketCommand) -> Packet {
         Packet::new(command, self.id)
     }
