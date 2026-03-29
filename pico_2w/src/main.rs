@@ -186,7 +186,7 @@ fn get_unique_id() -> u128 {
 ///   Server → multicast Discover → we reply DiscoverResponse (unicast, our chip ID in header)
 ///   DataReading packets are multicast to 239.0.0.1:5000 so every server receives them
 #[embassy_executor::task]
-async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, shared_state: Arc<State>) {
+async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, _shared_state: Arc<State>) {
     info!("network_task: waiting for DHCP");
     while !stack.is_config_up() {
         Timer::after_millis(100).await;
