@@ -200,6 +200,7 @@ dependencies = [
  "assign-resources",
  "byte-slice-cast",
  "chlorophyll-protocol",
+ "chlorophyll-sensor-lib",
  "chlorophyll-ui",
  "cortex-m",
  "cortex-m-rt",
@@ -254,6 +255,10 @@ dependencies = [
  "postcard",
  "serde",
 ]
+
+[[package]]
+name = "chlorophyll-sensor-lib"
+version = "0.1.0"
 
 [[package]]
 name = "chlorophyll-ui"

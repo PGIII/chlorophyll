@@ -15,7 +15,8 @@ use chlorophyll_ui::display::{DisplayState, SensorDisplay};
 use chlorophyll_ui::displays::binary_250x122::Display250x122Binary;
 use core::cell::RefCell;
 use core::net::Ipv4Addr;
-use core::sync::atomic::{AtomicBool, Ordering};
+use chlorophyll_sensor_lib::State;
+use core::sync::atomic::Ordering;
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use defmt::{info, unwrap, warn};
@@ -95,11 +96,6 @@ bind_interrupts!(struct Irqs {
 });
 
 static SENSOR_DATA_CHANNEL: SensorDataChannel = Channel::new();
-#[derive(Debug, Default)]
-struct State {
-    pub is_fast_mode: AtomicBool,
-    pub was_reset_by_watchdog: AtomicBool,
-}
 
 // Funcs
 #[embassy_executor::task]
