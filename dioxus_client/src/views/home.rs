@@ -20,6 +20,10 @@ pub fn Home() -> Element {
         DataEntry, MULTICAST_ADDR, PORT, REDISCOVER_TICKS, process_packets, send_discover,
     };
 
+    /// Re-join the multicast group every ~10 s (100 ticks × 100 ms) to send a fresh
+    /// IGMP membership report and prevent the router from timing out our membership.
+    const REJOIN_TICKS: u64 = 100;
+
     let mut readings: Signal<Vec<DataEntry>> = use_signal(Vec::new);
     let mut known_devices: Signal<HashMap<u128, SocketAddr>> = use_signal(HashMap::new);
 
@@ -41,6 +45,14 @@ pub fn Home() -> Element {
         let mut tick: u64 = 0;
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            if tick > 0 && tick % REJOIN_TICKS == 0 {
+                // A plain join on an already-joined socket is rejected with EADDRINUSE;
+                // leave+join is the only way to trigger a fresh IGMP membership report.
+                socket.leave_multicast_v4(MULTICAST_ADDR, Ipv4Addr::UNSPECIFIED).ok();
+                if let Err(e) = socket.join_multicast_v4(MULTICAST_ADDR, Ipv4Addr::UNSPECIFIED) {
+                    tracing::error!("Failed to rejoin multicast group: {e}");
+                }
+            }
             if tick > 0 && tick % REDISCOVER_TICKS == 0 {
                 send_discover(&socket).await.ok();
             }
