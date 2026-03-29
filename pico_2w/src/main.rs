@@ -11,7 +11,7 @@ mod temp_humidity_sensor;
 
 use alloc::sync::Arc;
 use chlorophyll_protocol::postcard::to_allocvec;
-use chlorophyll_protocol::*;
+use chlorophyll_protocol::{DataType, temperature, humidity, light, PacketBuilder, postcard, Packet, PacketCommand};
 use chlorophyll_ui::display::{DisplayState, SensorDisplay};
 use chlorophyll_ui::displays::binary_250x122::Display250x122Binary;
 use core::cell::RefCell;
@@ -178,14 +178,14 @@ async fn i2c1_sensor_task(i2c_bus: &'static I2c1Bus, tx: SensorDataSender) {
 }
 
 fn get_unique_id() -> u128 {
-    embassy_rp::otp::get_chipid().expect("error fetching chip ID") as u128
+    u128::from(embassy_rp::otp::get_chipid().expect("error fetching chip ID"))
 }
 
 /// Handles all network I/O: responds to discovery, then streams sensor data multicast.
 ///
 /// Protocol flow:
-///   Server → multicast Discover → we reply DiscoverResponse (unicast, our chip ID in header)
-///   DataReading packets are multicast to 239.0.0.1:5000 so every server receives them
+///   Server → multicast Discover → we reply `DiscoverResponse` (unicast, our chip ID in header)
+///   `DataReading` packets are multicast to 239.0.0.1:5000 so every server receives them
 #[embassy_executor::task]
 async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, _shared_state: Arc<State>) {
     info!("network_task: waiting for DHCP");
@@ -222,37 +222,25 @@ async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, _shared_sta
             Either::First(recv_result) => match recv_result {
                 Ok((len, meta)) => {
                     let src = meta.endpoint;
-                    match postcard::from_bytes::<Packet>(&recv_buf[..len]) {
-                        Ok(packet) => match packet.command() {
-                            PacketCommand::Discover => {
-                                info!("Discover from {:?}, sending DiscoverResponse", src);
-                                let resp = packet_builder.build(PacketCommand::DiscoverResponse);
-                                match to_allocvec(&resp) {
-                                    Ok(data) => {
-                                        if let Err(e) = socket.send_to(&data, src).await {
-                                            warn!("DiscoverResponse send error: {:?}", e);
-                                        }
-                                    }
-                                    Err(_) => warn!("DiscoverResponse serialize error"),
-                                }
+                    if let Ok(packet) = postcard::from_bytes::<Packet>(&recv_buf[..len]) { if packet.command() == &PacketCommand::Discover {
+                        info!("Discover from {:?}, sending DiscoverResponse", src);
+                        let resp = packet_builder.build(PacketCommand::DiscoverResponse);
+                        if let Ok(data) = to_allocvec(&resp) {
+                            if let Err(e) = socket.send_to(&data, src).await {
+                                warn!("DiscoverResponse send error: {:?}", e);
                             }
-                            _ => {}
-                        },
-                        Err(_) => warn!("packet parse error"),
-                    }
+                        } else { warn!("DiscoverResponse serialize error") }
+                    } } else { warn!("packet parse error") }
                 }
                 Err(e) => warn!("recv_from error: {:?}", e),
             },
             Either::Second(reading) => {
                 let packet = packet_builder.build(PacketCommand::DataReading(reading));
-                match to_allocvec(&packet) {
-                    Ok(data) => {
-                        if let Err(e) = socket.send_to(&data, multicast_ep).await {
-                            warn!("DataReading send error: {:?}", e);
-                        }
+                if let Ok(data) = to_allocvec(&packet) {
+                    if let Err(e) = socket.send_to(&data, multicast_ep).await {
+                        warn!("DataReading send error: {:?}", e);
                     }
-                    Err(_) => warn!("DataReading serialize error"),
-                }
+                } else { warn!("DataReading serialize error") }
             }
         }
     }
@@ -382,8 +370,7 @@ async fn main(spawner: Spawner) {
     let mut watchdog = Watchdog::new(p.WATCHDOG);
     let was_reset = watchdog
         .reset_reason()
-        .map(|r| r == embassy_rp::watchdog::ResetReason::TimedOut)
-        .unwrap_or(false);
+        .is_some_and(|r| r == embassy_rp::watchdog::ResetReason::TimedOut);
 
     state
         .was_reset_by_watchdog
@@ -454,7 +441,7 @@ async fn main(spawner: Spawner) {
             )
             .await
         {
-            Ok(_) => break,
+            Ok(()) => break,
             Err(err) => {
                 info!("join failed with status={}", err.status);
             }
