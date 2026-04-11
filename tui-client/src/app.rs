@@ -5,7 +5,8 @@ use crate::event::{AppEvent, Event, EventHandler};
 use crate::log_widget::LogState;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
-use sensor_server::{process_packets, DataEntry, MULTICAST_ADDR, PORT};
+use sensor_server::{process_packets, DataEntry, MULTICAST_ADDR, MAX_READINGS, PORT};
+use sensor_server::db::Db;
 
 /// Re-join the multicast group every ~10 s to send a fresh IGMP membership report.
 const REJOIN_TICKS: u64 = 300;
@@ -23,6 +24,7 @@ pub struct App {
     pub events: EventHandler,
 
     pub socket: Option<UdpSocket>,
+    pub db: Option<Db>,
     pub last_reading: Vec<DataEntry>,
     pub log_state: LogState,
 
@@ -38,6 +40,7 @@ impl Default for App {
             counter: 0,
             events: EventHandler::new(),
             socket: None,
+            db: None,
             last_reading: Vec::new(),
             log_state: LogState::new(true),
             known_devices: HashMap::new(),
@@ -54,6 +57,7 @@ impl App {
             counter: 0,
             events: EventHandler::new(),
             socket: None,
+            db: None,
             last_reading: Vec::new(),
             log_state,
             known_devices: HashMap::new(),
@@ -63,6 +67,23 @@ impl App {
 
     /// Run the application's main loop.
     pub async fn run(mut self, mut terminal: DefaultTerminal) -> color_eyre::Result<()> {
+        let db_path =
+            std::env::var("CHLOROPHYLL_DB").unwrap_or_else(|_| "chlorophyll.db".to_string());
+        match Db::open(&db_path).await {
+            Ok(db) => {
+                info!("Database opened at {db_path}");
+                match db.load_all().await {
+                    Ok(history) => {
+                        info!("Loaded {} historical readings", history.len());
+                        self.last_reading = history;
+                    }
+                    Err(e) => error!("Failed to load history: {e}"),
+                }
+                self.db = Some(db);
+            }
+            Err(e) => error!("Failed to open database at {db_path}: {e}"),
+        }
+
         while self.running {
             terminal.draw(|frame| frame.render_widget(&self, frame.area()))?;
             match self.events.next().await? {
@@ -141,10 +162,23 @@ impl App {
                 }
             }
 
+            let mut new_entries = Vec::new();
             if let Err(e) =
-                process_packets(sock, &mut self.known_devices, &mut self.last_reading).await
+                process_packets(sock, &mut self.known_devices, &mut new_entries).await
             {
                 error!("process_packets error: {e}");
+            }
+            if let Some(db) = &self.db {
+                for entry in &new_entries {
+                    if let Err(e) = db.insert_entry(entry).await {
+                        error!("DB insert error: {e}");
+                    }
+                }
+            }
+            self.last_reading.extend(new_entries);
+            if self.last_reading.len() > MAX_READINGS {
+                let excess = self.last_reading.len() - MAX_READINGS;
+                self.last_reading.drain(..excess);
             }
         } else {
             info!("No socket, setting up");

@@ -52,21 +52,23 @@ body {
 .charts {
     flex: 1;
     display: flex;
-    flex-direction: row;
+    flex-direction: column;
     overflow: hidden;
+    min-height: 0;
 }
 
 .chart {
     flex: 1;
     display: flex;
     flex-direction: column;
-    border-right: 1px solid #1e2230;
+    border-bottom: 1px solid #1e2230;
     padding: 8px;
     overflow: hidden;
+    min-height: 0;
 }
 
 .chart:last-child {
-    border-right: none;
+    border-bottom: none;
 }
 
 /* ── Sensor list ───────────────────────────────────────── */

@@ -16,6 +16,7 @@ pub fn Home() -> Element {
     use chlorophyll_protocol::light::Light;
     use chlorophyll_protocol::temperature::Temperature;
     use chrono::Utc;
+    use sensor_server::db::Db;
     use sensor_server::{
         DataEntry, MULTICAST_ADDR, PORT, REDISCOVER_TICKS, process_packets, send_discover,
     };
@@ -40,6 +41,27 @@ pub fn Home() -> Element {
             tracing::error!("Failed to join multicast group: {e}");
             return;
         }
+
+        let db_path =
+            std::env::var("CHLOROPHYLL_DB").unwrap_or_else(|_| "chlorophyll.db".to_string());
+        let db = match Db::open(&db_path).await {
+            Ok(db) => {
+                tracing::info!("Database opened at {db_path}");
+                match db.load_all().await {
+                    Ok(history) => {
+                        tracing::info!("Loaded {} historical readings", history.len());
+                        readings.write().extend(history);
+                    }
+                    Err(e) => tracing::error!("Failed to load history: {e}"),
+                }
+                Some(db)
+            }
+            Err(e) => {
+                tracing::error!("Failed to open database at {db_path}: {e}");
+                None
+            }
+        };
+
         send_discover(&socket).await.ok();
 
         let mut tick: u64 = 0;
@@ -59,6 +81,13 @@ pub fn Home() -> Element {
             let mut local_devices = known_devices.read().clone();
             let mut new_readings: Vec<DataEntry> = Vec::new();
             process_packets(&socket, &mut local_devices, &mut new_readings).await.ok();
+            if let Some(ref db) = db {
+                for entry in &new_readings {
+                    if let Err(e) = db.insert_entry(entry).await {
+                        tracing::error!("DB insert error: {e}");
+                    }
+                }
+            }
             if !new_readings.is_empty() {
                 readings.write().extend(new_readings);
             }
