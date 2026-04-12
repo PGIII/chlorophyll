@@ -50,8 +50,9 @@ pub fn LineChart(series: Vec<ChartSeries>, title: String) -> Element {
 
     // zoom: fraction of full x_range visible (1.0 = all data, 0.01 = 1%)
     let mut zoom = use_signal(|| 1.0_f64);
-    // pan: where vis_min sits as a fraction of the slidable range [0=left, 1=right]
-    let mut pan = use_signal(|| 1.0_f64);
+    // time_offset: seconds relative to max_x for the right edge (≤ 0).
+    // Default 0 = always follow the live right edge → auto-scrolls as data arrives.
+    let mut time_offset = use_signal(|| 0.0_f64);
     // CSS pixel width of the wrapper div (from onmounted, for coordinate conversion)
     let mut css_width = use_signal(|| SVG_W);
     // drag: Some(last element-relative x in CSS pixels) while mouse is held
@@ -62,9 +63,9 @@ pub fn LineChart(series: Vec<ChartSeries>, title: String) -> Element {
     // ── Visible window ────────────────────────────────────────────────────────
     let z = zoom();
     let vis_range = x_range * z;
-    let slidable = (x_range - vis_range).max(0.0);
-    let vis_min = min_x + pan() * slidable;
-    let vis_max = (vis_min + vis_range).min(max_x);
+    // vis_max tracks the live right edge unless the user has panned left
+    let vis_max = (max_x + time_offset()).min(max_x);
+    let vis_min = (vis_max - vis_range).max(min_x);
     let vis_range_act = (vis_max - vis_min).max(1.0);
 
     let tx = |t: f64| PL + (t - vis_min) / vis_range_act * CW;
@@ -147,15 +148,16 @@ pub fn LineChart(series: Vec<ChartSeries>, title: String) -> Element {
         let new_vis = x_range * new_z;
         let mn = mouse_norm();
 
-        let old_vis_min = min_x + pan() * (x_range - old_vis).max(0.0);
-        let t_cursor = old_vis_min + mn * old_vis;
+        // Keep the timestamp under the cursor fixed while zooming
+        let old_vis_max = (max_x + time_offset()).min(max_x);
+        let old_vis_min = (old_vis_max - old_vis).max(min_x);
+        let t_cursor = old_vis_min + mn * (old_vis_max - old_vis_min).max(1.0);
 
-        let new_vis_min = (t_cursor - mn * new_vis).clamp(min_x, (max_x - new_vis).max(min_x));
-        let denom = (x_range - new_vis).max(1e-9);
-        let new_pan = ((new_vis_min - min_x) / denom).clamp(0.0, 1.0);
+        let new_vis_max = t_cursor + (1.0 - mn) * new_vis;
+        let new_offset = (new_vis_max - max_x).clamp(-x_range, 0.0);
 
         zoom.set(new_z);
-        pan.set(new_pan);
+        time_offset.set(new_offset);
     };
 
     let onmousemove = move |evt: MouseEvent| {
@@ -169,12 +171,9 @@ pub fn LineChart(series: Vec<ChartSeries>, title: String) -> Element {
             let delta_css = ex - last;
             let data_area_css = w * CW / SVG_W;
             let delta_t = -(delta_css / data_area_css) * vis_range_act;
-            let z = zoom();
-            let vr = x_range * z;
-            let cur_min = min_x + pan() * (x_range - vr).max(0.0);
-            let new_min = (cur_min + delta_t).clamp(min_x, (max_x - vr).max(min_x));
-            let denom = (x_range - vr).max(1e-9);
-            pan.set(((new_min - min_x) / denom).clamp(0.0, 1.0));
+            // Shift the view window; clamp so we can't scroll past the data
+            let new_offset = (time_offset() + delta_t).clamp(-x_range, 0.0);
+            time_offset.set(new_offset);
             drag_x.set(Some(ex));
         }
     };

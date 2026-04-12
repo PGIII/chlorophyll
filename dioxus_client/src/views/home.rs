@@ -186,37 +186,59 @@ pub fn Home() -> Element {
 }
 
 // ── Web ───────────────────────────────────────────────────────────────────────
-// Polls the server function every 2 s; networking runs in the server process.
+// Loads history once on mount, then polls for deltas every 2 s.
 
 #[cfg(not(feature = "desktop"))]
 #[component]
 pub fn Home() -> Element {
-    use crate::api::get_snapshot;
+    use crate::api::{get_history, get_snapshot};
 
-    #[allow(unused_mut)]
-    let mut refresh = use_signal(|| 0u32);
+    let mut snap = use_signal(SensorSnapshot::default);
+    // Unix timestamp cursor: only request readings newer than this
+    let mut cursor = use_signal(|| 0_i64);
 
-    let snapshot = use_resource(move || {
-        let _ = refresh(); // reactive dependency → reruns when refresh ticks
-        async move { get_snapshot().await.unwrap_or_default() }
-    });
-
-    // Tick every 2 s using the browser timer (no tokio in WASM)
-    #[cfg(feature = "web")]
     use_coroutine(move |_rx: UnboundedReceiver<()>| async move {
+        // Load full history once
+        if let Ok(history) = get_history().await {
+            let new_cursor = max_ts(&history);
+            snap.write().temp_series.extend(history.temp_series);
+            snap.write().humidity_series.extend(history.humidity_series);
+            snap.write().light_series.extend(history.light_series);
+            if new_cursor > 0 {
+                cursor.set(new_cursor);
+            }
+        }
+
+        // Poll for deltas
         loop {
+            #[cfg(feature = "web")]
             gloo_timers::future::sleep(std::time::Duration::from_secs(2)).await;
-            *refresh.write() += 1;
+
+            if let Ok(delta) = get_snapshot(cursor()).await {
+                let new_cursor = max_ts(&delta).max(cursor());
+                {
+                    let mut s = snap.write();
+                    s.sensors = delta.sensors;
+                    s.temp_series.extend(delta.temp_series);
+                    s.humidity_series.extend(delta.humidity_series);
+                    s.light_series.extend(delta.light_series);
+                }
+                cursor.set(new_cursor);
+            }
         }
     });
 
-    let guard = snapshot.read();
-    match guard.as_ref() {
-        Some(snap) => render_dashboard(snap),
-        None => rsx! {
-            div { class: "loading", "Connecting to sensor server…" }
-        },
-    }
+    let data = snap.read();
+    render_dashboard(&data)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn max_ts(snap: &SensorSnapshot) -> i64 {
+    snap.temp_series.iter().map(|(t, _)| *t)
+        .chain(snap.humidity_series.iter().map(|(t, _)| *t))
+        .chain(snap.light_series.iter().map(|(t, _)| *t))
+        .max()
+        .unwrap_or(0)
 }
 
 // ── Shared render ─────────────────────────────────────────────────────────────
