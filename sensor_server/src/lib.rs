@@ -39,11 +39,12 @@ pub async fn send_discover(socket: &UdpSocket) -> color_eyre::Result<()> {
 
 /// Drain all pending inbound packets and handle protocol logic.
 ///
-/// - `DiscoverResponse` → record device (pico streams to multicast automatically)
+/// - `DiscoverResponse` → record device and optional sensor name
 /// - `DataReading`      → append to `readings`
 pub async fn process_packets(
     socket: &UdpSocket,
     known_devices: &mut HashMap<u128, SocketAddr>,
+    sensor_names: &mut HashMap<u128, String>,
     readings: &mut Vec<DataEntry>,
 ) -> color_eyre::Result<()> {
     let mut buf = [0u8; 1500];
@@ -51,10 +52,14 @@ pub async fn process_packets(
         match socket.try_recv_from(&mut buf) {
             Ok((len, src)) => match from_bytes::<Packet>(&buf[..len]) {
                 Ok(packet) => match packet.command().clone() {
-                    PacketCommand::DiscoverResponse => {
+                    PacketCommand::DiscoverResponse(name) => {
                         let id = packet.id();
                         info!("DiscoverResponse from {} (id={:x})", src, id);
                         known_devices.insert(id, src);
+                        if let Some(n) = name {
+                            info!("  sensor name: {n}");
+                            sensor_names.insert(id, n);
+                        }
                     }
                     PacketCommand::DataReading(data_type) => {
                         let now = Utc::now();
@@ -87,5 +92,16 @@ pub async fn process_packets(
             }
         }
     }
+    Ok(())
+}
+
+/// Send a `SetName` packet to the multicast group; only the sensor whose id matches will apply it.
+pub async fn send_set_name(socket: &UdpSocket, sensor_id: u128, name: &str) -> color_eyre::Result<()> {
+    use chlorophyll_protocol::postcard::to_allocvec;
+    let packet = Packet::new(PacketCommand::SetName(name.to_string()), sensor_id);
+    let data = to_allocvec(&packet).map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
+    let dest = SocketAddrV4::new(MULTICAST_ADDR, PORT);
+    socket.send_to(&data, dest).await?;
+    info!("Sent SetName(\"{name}\") for sensor {:032x}", sensor_id);
     Ok(())
 }

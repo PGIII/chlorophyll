@@ -12,6 +12,9 @@ mod temp_humidity_sensor;
 use alloc::sync::Arc;
 use chlorophyll_protocol::postcard::to_allocvec;
 use chlorophyll_protocol::{DataType, temperature, humidity, light, PacketBuilder, postcard, Packet, PacketCommand};
+use embassy_rp::flash::{Flash, ERASE_SIZE};
+use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
+use heapless::String as HString;
 use chlorophyll_ui::display::{DisplayState, SensorDisplay};
 use chlorophyll_ui::displays::binary_250x122::Display250x122Binary;
 use core::cell::RefCell;
@@ -58,6 +61,41 @@ use {defmt_rtt as _, panic_probe as _};
 type I2c1Bus = Mutex<NoopRawMutex, RefCell<i2c::I2c<'static, I2C1, i2c::Blocking>>>;
 
 const SENSOR_DATA_CHANNEL_DEPTH: usize = 32;
+
+const FLASH_TOTAL: usize = 2 * 1024 * 1024;
+const SETTINGS_OFFSET: u32 = (FLASH_TOTAL - ERASE_SIZE) as u32;
+const SETTINGS_MAGIC: u32 = 0xC4B0_1C1C;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FlashConfig {
+    magic: u32,
+    name: HString<64>,
+}
+
+fn read_name_from_flash(flash: &mut embassy_rp::peripherals::FLASH) -> Option<HString<64>> {
+    let mut flash = Flash::<_, embassy_rp::flash::Blocking, FLASH_TOTAL>::new(flash);
+    let mut buf = [0u8; 256];
+    if flash.blocking_read(SETTINGS_OFFSET, &mut buf).is_err() {
+        return None;
+    }
+    postcard::from_bytes::<FlashConfig>(&buf)
+        .ok()
+        .filter(|c| c.magic == SETTINGS_MAGIC)
+        .map(|c| c.name)
+}
+
+fn write_name_to_flash(flash: &mut embassy_rp::peripherals::FLASH, name: &str) {
+    let mut flash = Flash::<_, embassy_rp::flash::Blocking, FLASH_TOTAL>::new(flash);
+    let cfg = FlashConfig {
+        magic: SETTINGS_MAGIC,
+        name: HString::try_from(name).unwrap_or_default(),
+    };
+    if let Ok(bytes) = postcard::to_allocvec(&cfg) {
+        let _ = flash.blocking_erase(SETTINGS_OFFSET, SETTINGS_OFFSET + ERASE_SIZE as u32);
+        let _ = flash.blocking_write(SETTINGS_OFFSET, &bytes);
+    }
+}
+
 type SensorDataChannel = Channel<CriticalSectionRawMutex, DataType, SENSOR_DATA_CHANNEL_DEPTH>;
 type SensorDataReceiver =
     Receiver<'static, CriticalSectionRawMutex, DataType, SENSOR_DATA_CHANNEL_DEPTH>;
@@ -187,7 +225,11 @@ fn get_unique_id() -> u128 {
 ///   Server → multicast Discover → we reply `DiscoverResponse` (unicast, our chip ID in header)
 ///   `DataReading` packets are multicast to 239.0.0.1:5000 so every server receives them
 #[embassy_executor::task]
-async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, _shared_state: Arc<State>) {
+async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, _shared_state: Arc<State>, mut flash_periph: embassy_rp::peripherals::FLASH) {
+    let mut current_name: Option<HString<64>> = read_name_from_flash(&mut flash_periph);
+    if let Some(ref n) = current_name {
+        info!("Loaded sensor name from NVM: {}", n.as_str());
+    }
     info!("network_task: waiting for DHCP");
     while !stack.is_config_up() {
         Timer::after_millis(100).await;
@@ -222,15 +264,26 @@ async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, _shared_sta
             Either::First(recv_result) => match recv_result {
                 Ok((len, meta)) => {
                     let src = meta.endpoint;
-                    if let Ok(packet) = postcard::from_bytes::<Packet>(&recv_buf[..len]) { if packet.command() == &PacketCommand::Discover {
-                        info!("Discover from {:?}, sending DiscoverResponse", src);
-                        let resp = packet_builder.build(PacketCommand::DiscoverResponse);
-                        if let Ok(data) = to_allocvec(&resp) {
-                            if let Err(e) = socket.send_to(&data, src).await {
-                                warn!("DiscoverResponse send error: {:?}", e);
+                    if let Ok(packet) = postcard::from_bytes::<Packet>(&recv_buf[..len]) {
+                        if packet.command() == &PacketCommand::Discover {
+                            info!("Discover from {:?}, sending DiscoverResponse", src);
+                            let name_str = current_name.as_ref().map(|n| n.as_str().into());
+                            let resp = packet_builder.build(PacketCommand::DiscoverResponse(name_str));
+                            if let Ok(data) = to_allocvec(&resp) {
+                                if let Err(e) = socket.send_to(&data, src).await {
+                                    warn!("DiscoverResponse send error: {:?}", e);
+                                }
+                            } else {
+                                warn!("DiscoverResponse serialize error");
                             }
-                        } else { warn!("DiscoverResponse serialize error") }
-                    } } else { warn!("packet parse error") }
+                        } else if let PacketCommand::SetName(ref name) = packet.command().clone() {
+                            if packet.id() == get_unique_id() {
+                                info!("SetName: storing \"{}\" to NVM", name.as_str());
+                                write_name_to_flash(&mut flash_periph, name);
+                                current_name = Some(HString::try_from(name.as_str()).unwrap_or_default());
+                            }
+                        }
+                    } else { warn!("packet parse error") }
                 }
                 Err(e) => warn!("recv_from error: {:?}", e),
             },
@@ -451,7 +504,8 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(network_task(
         stack,
         SENSOR_DATA_CHANNEL.receiver(),
-        state.clone()
+        state.clone(),
+        p.FLASH,
     )));
 
     info!("Building display");
