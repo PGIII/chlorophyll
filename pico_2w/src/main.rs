@@ -72,8 +72,9 @@ struct FlashConfig {
     name: HString<64>,
 }
 
-fn read_name_from_flash(flash: &mut embassy_rp::peripherals::FLASH) -> Option<HString<64>> {
-    let mut flash = Flash::<_, embassy_rp::flash::Blocking, FLASH_TOTAL>::new(flash);
+type NvmFlash = Flash<'static, embassy_rp::peripherals::FLASH, embassy_rp::flash::Blocking, FLASH_TOTAL>;
+
+fn read_name_from_flash(flash: &mut NvmFlash) -> Option<HString<64>> {
     let mut buf = [0u8; 256];
     if flash.blocking_read(SETTINGS_OFFSET, &mut buf).is_err() {
         return None;
@@ -84,8 +85,7 @@ fn read_name_from_flash(flash: &mut embassy_rp::peripherals::FLASH) -> Option<HS
         .map(|c| c.name)
 }
 
-fn write_name_to_flash(flash: &mut embassy_rp::peripherals::FLASH, name: &str) {
-    let mut flash = Flash::<_, embassy_rp::flash::Blocking, FLASH_TOTAL>::new(flash);
+fn write_name_to_flash(flash: &mut NvmFlash, name: &str) {
     let cfg = FlashConfig {
         magic: SETTINGS_MAGIC,
         name: HString::try_from(name).unwrap_or_default(),
@@ -225,8 +225,9 @@ fn get_unique_id() -> u128 {
 ///   Server → multicast Discover → we reply `DiscoverResponse` (unicast, our chip ID in header)
 ///   `DataReading` packets are multicast to 239.0.0.1:5000 so every server receives them
 #[embassy_executor::task]
-async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, _shared_state: Arc<State>, mut flash_periph: embassy_rp::peripherals::FLASH) {
-    let mut current_name: Option<HString<64>> = read_name_from_flash(&mut flash_periph);
+async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, _shared_state: Arc<State>, flash_periph: embassy_rp::Peri<'static, embassy_rp::peripherals::FLASH>) {
+    let mut flash = Flash::<_, embassy_rp::flash::Blocking, FLASH_TOTAL>::new_blocking(flash_periph);
+    let mut current_name: Option<HString<64>> = read_name_from_flash(&mut flash);
     if let Some(ref n) = current_name {
         info!("Loaded sensor name from NVM: {}", n.as_str());
     }
@@ -279,7 +280,7 @@ async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, _shared_sta
                         } else if let PacketCommand::SetName(ref name) = packet.command().clone() {
                             if packet.id() == get_unique_id() {
                                 info!("SetName: storing \"{}\" to NVM", name.as_str());
-                                write_name_to_flash(&mut flash_periph, name);
+                                write_name_to_flash(&mut flash, name);
                                 current_name = Some(HString::try_from(name.as_str()).unwrap_or_default());
                             }
                         }
