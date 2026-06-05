@@ -12,9 +12,8 @@ mod temp_humidity_sensor;
 use alloc::sync::Arc;
 use chlorophyll_protocol::postcard::to_allocvec;
 use chlorophyll_protocol::{DataType, temperature, humidity, light, PacketBuilder, postcard, Packet, PacketCommand};
+use chlorophyll_sensor_lib::config::{self as device_config, DeviceConfig};
 use embassy_rp::flash::{Flash, ERASE_SIZE};
-use embedded_storage::nor_flash::NorFlash;
-use heapless::String as HString;
 use chlorophyll_ui::display::{DisplayState, SensorDisplay};
 use chlorophyll_ui::displays::binary_250x122::Display250x122Binary;
 use core::cell::RefCell;
@@ -62,39 +61,14 @@ type I2c1Bus = Mutex<NoopRawMutex, RefCell<i2c::I2c<'static, I2C1, i2c::Blocking
 
 const SENSOR_DATA_CHANNEL_DEPTH: usize = 32;
 
-const FLASH_TOTAL: usize = 2 * 1024 * 1024;
-const SETTINGS_OFFSET: u32 = (FLASH_TOTAL - ERASE_SIZE) as u32;
-const SETTINGS_MAGIC: u32 = 0xC4B0_1C1C;
+/// Total flash size for the RP2350 on Pico 2 / Pico 2W (4 MB).
+/// Must match the physical flash chip. Used as the const generic for embassy-rp's Flash driver.
+const FLASH_SIZE: usize = 4 * 1024 * 1024;
 
-#[derive(serde::Serialize, serde::Deserialize)]
-struct FlashConfig {
-    magic: u32,
-    name: HString<64>,
-}
+/// Offset of the device-config sector: the last 4 KB of flash, outside the firmware image.
+const SETTINGS_OFFSET: u32 = (FLASH_SIZE - ERASE_SIZE) as u32;
 
-type NvmFlash = Flash<'static, embassy_rp::peripherals::FLASH, embassy_rp::flash::Blocking, FLASH_TOTAL>;
-
-fn read_name_from_flash(flash: &mut NvmFlash) -> Option<HString<64>> {
-    let mut buf = [0u8; 256];
-    if flash.blocking_read(SETTINGS_OFFSET, &mut buf).is_err() {
-        return None;
-    }
-    postcard::from_bytes::<FlashConfig>(&buf)
-        .ok()
-        .filter(|c| c.magic == SETTINGS_MAGIC)
-        .map(|c| c.name)
-}
-
-fn write_name_to_flash(flash: &mut NvmFlash, name: &str) {
-    let cfg = FlashConfig {
-        magic: SETTINGS_MAGIC,
-        name: HString::try_from(name).unwrap_or_default(),
-    };
-    if let Ok(bytes) = postcard::to_allocvec(&cfg) {
-        let _ = flash.blocking_erase(SETTINGS_OFFSET, SETTINGS_OFFSET + ERASE_SIZE as u32);
-        let _ = flash.blocking_write(SETTINGS_OFFSET, &bytes);
-    }
-}
+type NvmFlash = Flash<'static, embassy_rp::peripherals::FLASH, embassy_rp::flash::Blocking, FLASH_SIZE>;
 
 type SensorDataChannel = Channel<CriticalSectionRawMutex, DataType, SENSOR_DATA_CHANNEL_DEPTH>;
 type SensorDataReceiver =
@@ -219,17 +193,17 @@ fn get_unique_id() -> u128 {
     u128::from(embassy_rp::otp::get_chipid().expect("error fetching chip ID"))
 }
 
-/// Handles all network I/O: responds to discovery, then streams sensor data multicast.
+/// Handles all network I/O: responds to sensor info requests, then streams sensor data multicast.
 ///
 /// Protocol flow:
-///   Server → multicast Discover → we reply `DiscoverResponse` (unicast, our chip ID in header)
+///   Server → multicast `RequestSensorInfo` → we reply `SensorsInfo` (unicast, chip ID in header)
 ///   `DataReading` packets are multicast to 239.0.0.1:5000 so every server receives them
 #[embassy_executor::task]
 async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, _shared_state: Arc<State>, flash_periph: embassy_rp::Peri<'static, embassy_rp::peripherals::FLASH>) {
-    let mut flash = Flash::<_, embassy_rp::flash::Blocking, FLASH_TOTAL>::new_blocking(flash_periph);
-    let mut current_name: Option<HString<64>> = read_name_from_flash(&mut flash);
-    if let Some(ref n) = current_name {
-        info!("Loaded sensor name from NVM: {}", n.as_str());
+    let mut flash = Flash::<_, embassy_rp::flash::Blocking, FLASH_SIZE>::new_blocking(flash_periph);
+    let mut cfg: DeviceConfig = device_config::load(&mut flash, SETTINGS_OFFSET).unwrap_or_default();
+    if !cfg.name.is_empty() {
+        info!("Loaded sensor name from NVM: {}", cfg.name.as_str());
     }
     info!("network_task: waiting for DHCP");
     while !stack.is_config_up() {
@@ -260,14 +234,14 @@ async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, _shared_sta
     let packet_builder = PacketBuilder::new(get_unique_id());
     let multicast_ep = IpEndpoint::new(IpAddress::Ipv4(Ipv4Addr::new(239, 0, 0, 1)), 5000);
 
-    // Announce name to multicast on boot so any already-running server learns it immediately.
-    if let Some(ref n) = current_name {
-        let ann = packet_builder.build(PacketCommand::DiscoverResponse(Some(n.as_str().into())));
+    // On boot, multicast our name so any already-running server learns it immediately.
+    if !cfg.name.is_empty() {
+        let ann = packet_builder.build(PacketCommand::SensorsInfo(Some(cfg.name.as_str().into())));
         if let Ok(data) = to_allocvec(&ann) {
             if let Err(e) = socket.send_to(&data, multicast_ep).await {
                 warn!("boot announce send error: {:?}", e);
             } else {
-                info!("Announced name \"{}\" to multicast", n.as_str());
+                info!("Announced name \"{}\" to multicast", cfg.name.as_str());
             }
         }
     }
@@ -278,32 +252,25 @@ async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, _shared_sta
                 Ok((len, meta)) => {
                     let src = meta.endpoint;
                     if let Ok(packet) = postcard::from_bytes::<Packet>(&recv_buf[..len]) {
-                        if packet.command() == &PacketCommand::Discover {
-                            info!("Discover from {:?}, sending DiscoverResponse", src);
-                            let name_str = current_name.as_ref().map(|n| n.as_str().into());
-                            // Unicast back to the requester (sensor_server uses this for IP tracking).
-                            let resp = packet_builder.build(PacketCommand::DiscoverResponse(name_str.clone()));
+                        if packet.command() == &PacketCommand::RequestSensorInfo {
+                            info!("RequestSensorInfo from {:?}", src);
+                            let name = if cfg.name.is_empty() { None } else { Some(cfg.name.as_str().into()) };
+                            // Unicast back to the requester — they have our address from this packet.
+                            let resp = packet_builder.build(PacketCommand::SensorsInfo(name));
                             if let Ok(data) = to_allocvec(&resp) {
                                 if let Err(e) = socket.send_to(&data, src).await {
-                                    warn!("DiscoverResponse send error: {:?}", e);
+                                    warn!("SensorsInfo send error: {:?}", e);
                                 }
                             } else {
-                                warn!("DiscoverResponse serialize error");
-                            }
-                            // Also multicast the name so any server in the multicast group sees it.
-                            if name_str.is_some() {
-                                let ann = packet_builder.build(PacketCommand::DiscoverResponse(name_str));
-                                if let Ok(data) = to_allocvec(&ann) {
-                                    socket.send_to(&data, multicast_ep).await.ok();
-                                }
+                                warn!("SensorsInfo serialize error");
                             }
                         } else if let PacketCommand::SetName(ref name) = packet.command().clone() {
                             if packet.id() == get_unique_id() {
                                 info!("SetName: storing \"{}\" to NVM", name.as_str());
-                                write_name_to_flash(&mut flash, name);
-                                current_name = Some(HString::try_from(name.as_str()).unwrap_or_default());
-                                // Confirm to multicast so servers learn the new name immediately.
-                                let ann = packet_builder.build(PacketCommand::DiscoverResponse(Some(name.clone())));
+                                cfg.name = name.as_str().try_into().unwrap_or_default();
+                                device_config::save(&mut flash, SETTINGS_OFFSET, ERASE_SIZE as u32, &cfg);
+                                // Multicast confirmation so all servers learn the new name immediately.
+                                let ann = packet_builder.build(PacketCommand::SensorsInfo(Some(cfg.name.as_str().into())));
                                 if let Ok(data) = to_allocvec(&ann) {
                                     if let Err(e) = socket.send_to(&data, multicast_ep).await {
                                         warn!("SetName confirm send error: {:?}", e);

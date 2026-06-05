@@ -21,11 +21,12 @@ pub enum DataType {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub enum PacketCommand {
     DataReading(DataType),
-    /// Server → multicast: "who's online?"
-    Discover,
-    /// Pico → server unicast: "I'm here"; carries the sensor's NVM name if configured.
-    DiscoverResponse(Option<String>),
-    /// Server → multicast: "sensor matching packet.id, set your name to this string."
+    /// Server → multicast: request info from all online sensors.
+    RequestSensorInfo,
+    /// Sensor → server: sensor info, including NVM name if configured.
+    /// Sent unicast in response to `RequestSensorInfo`, and to multicast on boot / after `SetName`.
+    SensorsInfo(Option<String>),
+    /// Server → multicast: instruct the sensor matching `packet.id` to set its name.
     SetName(String),
 }
 
