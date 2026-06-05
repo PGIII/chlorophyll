@@ -260,6 +260,18 @@ async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, _shared_sta
     let packet_builder = PacketBuilder::new(get_unique_id());
     let multicast_ep = IpEndpoint::new(IpAddress::Ipv4(Ipv4Addr::new(239, 0, 0, 1)), 5000);
 
+    // Announce name to multicast on boot so any already-running server learns it immediately.
+    if let Some(ref n) = current_name {
+        let ann = packet_builder.build(PacketCommand::DiscoverResponse(Some(n.as_str().into())));
+        if let Ok(data) = to_allocvec(&ann) {
+            if let Err(e) = socket.send_to(&data, multicast_ep).await {
+                warn!("boot announce send error: {:?}", e);
+            } else {
+                info!("Announced name \"{}\" to multicast", n.as_str());
+            }
+        }
+    }
+
     loop {
         match select(socket.recv_from(recv_buf), rx.receive()).await {
             Either::First(recv_result) => match recv_result {
@@ -269,7 +281,8 @@ async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, _shared_sta
                         if packet.command() == &PacketCommand::Discover {
                             info!("Discover from {:?}, sending DiscoverResponse", src);
                             let name_str = current_name.as_ref().map(|n| n.as_str().into());
-                            let resp = packet_builder.build(PacketCommand::DiscoverResponse(name_str));
+                            // Unicast back to the requester (sensor_server uses this for IP tracking).
+                            let resp = packet_builder.build(PacketCommand::DiscoverResponse(name_str.clone()));
                             if let Ok(data) = to_allocvec(&resp) {
                                 if let Err(e) = socket.send_to(&data, src).await {
                                     warn!("DiscoverResponse send error: {:?}", e);
@@ -277,11 +290,25 @@ async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, _shared_sta
                             } else {
                                 warn!("DiscoverResponse serialize error");
                             }
+                            // Also multicast the name so lambic (listening on 239.0.0.1:5000) sees it.
+                            if name_str.is_some() {
+                                let ann = packet_builder.build(PacketCommand::DiscoverResponse(name_str));
+                                if let Ok(data) = to_allocvec(&ann) {
+                                    socket.send_to(&data, multicast_ep).await.ok();
+                                }
+                            }
                         } else if let PacketCommand::SetName(ref name) = packet.command().clone() {
                             if packet.id() == get_unique_id() {
                                 info!("SetName: storing \"{}\" to NVM", name.as_str());
                                 write_name_to_flash(&mut flash, name);
                                 current_name = Some(HString::try_from(name.as_str()).unwrap_or_default());
+                                // Confirm to multicast so servers learn the new name immediately.
+                                let ann = packet_builder.build(PacketCommand::DiscoverResponse(Some(name.clone())));
+                                if let Ok(data) = to_allocvec(&ann) {
+                                    if let Err(e) = socket.send_to(&data, multicast_ep).await {
+                                        warn!("SetName confirm send error: {:?}", e);
+                                    }
+                                }
                             }
                         }
                     } else { warn!("packet parse error") }
