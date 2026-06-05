@@ -1,5 +1,7 @@
 #![no_std]
 #![warn(clippy::pedantic)]
+extern crate alloc;
+use alloc::string::String;
 
 pub mod temperature;
 pub mod humidity;
@@ -19,11 +21,13 @@ pub enum DataType {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub enum PacketCommand {
     DataReading(DataType),
-    /// Server → multicast: "who's online?"
-    Discover,
-    /// Pico → server unicast: "I'm here" (device id in packet header)
-    /// Pico always streams `DataReading` to multicast; no `StartStreaming` needed.
-    DiscoverResponse,
+    /// Server → multicast: request info from all online sensors.
+    RequestSensorInfo,
+    /// Sensor → server: sensor info, including NVM name if configured.
+    /// Sent unicast in response to `RequestSensorInfo`, and to multicast on boot / after `SetName`.
+    SensorsInfo(Option<String>),
+    /// Server → multicast: instruct the sensor matching `packet.id` to set its name.
+    SetName(String),
 }
 
 type SensorID = u128;

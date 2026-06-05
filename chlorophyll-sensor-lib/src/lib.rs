@@ -1,6 +1,8 @@
 #![no_std]
 #![warn(clippy::pedantic)]
 
+pub mod config;
+
 use core::sync::atomic::AtomicBool;
 
 /// Shared application state passed as `Arc<State>` across Embassy tasks.
