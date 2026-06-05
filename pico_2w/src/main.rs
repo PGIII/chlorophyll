@@ -13,7 +13,7 @@ use alloc::sync::Arc;
 use chlorophyll_protocol::postcard::to_allocvec;
 use chlorophyll_protocol::{DataType, temperature, humidity, light, PacketBuilder, postcard, Packet, PacketCommand};
 use embassy_rp::flash::{Flash, ERASE_SIZE};
-use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
+use embedded_storage::nor_flash::NorFlash;
 use heapless::String as HString;
 use chlorophyll_ui::display::{DisplayState, SensorDisplay};
 use chlorophyll_ui::displays::binary_250x122::Display250x122Binary;
