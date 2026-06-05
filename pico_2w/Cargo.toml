@@ -4,6 +4,11 @@ name = "chlorophyll"
 version = "0.1.0"
 license = "MIT OR Apache-2.0"
 
+[features]
+default = ["flash-4mb"]
+flash-2mb = []
+flash-4mb = []
+flash-8mb = []
 
 [dependencies]
 # local depends

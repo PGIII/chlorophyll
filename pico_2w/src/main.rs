@@ -61,9 +61,16 @@ type I2c1Bus = Mutex<NoopRawMutex, RefCell<i2c::I2c<'static, I2C1, i2c::Blocking
 
 const SENSOR_DATA_CHANNEL_DEPTH: usize = 32;
 
-/// Total flash size for the RP2350 on Pico 2 / Pico 2W (4 MB).
-/// Must match the physical flash chip. Used as the const generic for embassy-rp's Flash driver.
-const FLASH_SIZE: usize = 4 * 1024 * 1024;
+#[cfg(all(
+    not(feature = "flash-2mb"),
+    not(feature = "flash-4mb"),
+    not(feature = "flash-8mb"),
+))]
+compile_error!("Select a flash size feature: flash-2mb, flash-4mb, or flash-8mb");
+
+#[cfg(feature = "flash-2mb")] const FLASH_SIZE: usize = 2 * 1024 * 1024;
+#[cfg(feature = "flash-4mb")] const FLASH_SIZE: usize = 4 * 1024 * 1024;
+#[cfg(feature = "flash-8mb")] const FLASH_SIZE: usize = 8 * 1024 * 1024;
 
 /// Offset of the device-config sector: the last 4 KB of flash, outside the firmware image.
 const SETTINGS_OFFSET: u32 = (FLASH_SIZE - ERASE_SIZE) as u32;
@@ -201,17 +208,6 @@ fn get_unique_id() -> u128 {
 #[embassy_executor::task]
 async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, _shared_state: Arc<State>, flash_periph: embassy_rp::Peri<'static, embassy_rp::peripherals::FLASH>) {
     let mut flash = Flash::<_, embassy_rp::flash::Blocking, FLASH_SIZE>::new_blocking(flash_periph);
-
-    // Validate FLASH_SIZE against the actual chip capacity reported via JEDEC ID.
-    // JEDEC byte 2 is log2(size_in_bytes); e.g. 0x16 → 2^22 = 4 MB.
-    if let Ok(jedec) = flash.blocking_jedec_id() {
-        let detected = 1usize << ((jedec >> 16) & 0xFF);
-        if detected != FLASH_SIZE {
-            warn!("FLASH_SIZE mismatch: const={} detected={}", FLASH_SIZE, detected);
-        } else {
-            info!("Flash: {} bytes (JEDEC {:06x})", FLASH_SIZE, jedec);
-        }
-    }
 
     let mut cfg: DeviceConfig = device_config::load(&mut flash, SETTINGS_OFFSET).unwrap_or_default();
     if !cfg.name.is_empty() {
