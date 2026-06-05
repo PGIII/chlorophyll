@@ -201,6 +201,18 @@ fn get_unique_id() -> u128 {
 #[embassy_executor::task]
 async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, _shared_state: Arc<State>, flash_periph: embassy_rp::Peri<'static, embassy_rp::peripherals::FLASH>) {
     let mut flash = Flash::<_, embassy_rp::flash::Blocking, FLASH_SIZE>::new_blocking(flash_periph);
+
+    // Validate FLASH_SIZE against the actual chip capacity reported via JEDEC ID.
+    // JEDEC byte 2 is log2(size_in_bytes); e.g. 0x16 → 2^22 = 4 MB.
+    if let Ok(jedec) = flash.blocking_jedec_id() {
+        let detected = 1usize << ((jedec >> 16) & 0xFF);
+        if detected != FLASH_SIZE {
+            warn!("FLASH_SIZE mismatch: const={} detected={}", FLASH_SIZE, detected);
+        } else {
+            info!("Flash: {} bytes (JEDEC {:06x})", FLASH_SIZE, jedec);
+        }
+    }
+
     let mut cfg: DeviceConfig = device_config::load(&mut flash, SETTINGS_OFFSET).unwrap_or_default();
     if !cfg.name.is_empty() {
         info!("Loaded sensor name from NVM: {}", cfg.name.as_str());
