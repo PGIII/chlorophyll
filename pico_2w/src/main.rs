@@ -290,7 +290,7 @@ async fn network_task(stack: Stack<'static>, rx: SensorDataReceiver, _shared_sta
                             } else {
                                 warn!("DiscoverResponse serialize error");
                             }
-                            // Also multicast the name so lambic (listening on 239.0.0.1:5000) sees it.
+                            // Also multicast the name so any server in the multicast group sees it.
                             if name_str.is_some() {
                                 let ann = packet_builder.build(PacketCommand::DiscoverResponse(name_str));
                                 if let Ok(data) = to_allocvec(&ann) {
