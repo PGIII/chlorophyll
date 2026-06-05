@@ -37,14 +37,15 @@ fn checksum(data: &[u8]) -> u32 {
     data.iter().fold(0u32, |acc, &b| acc.wrapping_add(b as u32))
 }
 
-/// Try to read a `DeviceConfig` from `flash` at `offset`.
+/// Try to read a `DeviceConfig` from `storage` at `offset`.
 /// Returns `None` if the sector is uninitialised, corrupted, or the checksum fails.
-pub fn load<F>(flash: &mut F, offset: u32) -> Option<DeviceConfig>
+/// Accepts any `ReadStorage` (NOR flash, EEPROM, RAM mock, …) — only `read` is required.
+pub fn load<S>(storage: &mut S, offset: u32) -> Option<DeviceConfig>
 where
-    F: embedded_storage::nor_flash::ReadNorFlash,
+    S: embedded_storage::ReadStorage,
 {
     let mut buf = [0u8; 8 + MAX_PAYLOAD];
-    flash.read(offset, &mut buf).ok()?;
+    storage.read(offset, &mut buf).ok()?;
 
     let magic = u32::from_le_bytes(buf[..4].try_into().ok()?);
     if magic != MAGIC {
