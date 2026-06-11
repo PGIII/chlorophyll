@@ -1,13 +1,18 @@
 #![warn(clippy::pedantic)]
 
+use std::sync::Arc;
+
 use chlorophyll_client::db::Db;
 use chlorophyll_client::{ClientConfig, SensorClient};
+use sensor_server::AppState;
 use tracing::*;
+
+const DEFAULT_HTTP_PORT: u16 = 5001;
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
-    tracing_subscriber::fmt::init();
+    orbit_service::init_tracing();
 
     let args: Vec<String> = std::env::args().collect();
 
@@ -29,10 +34,23 @@ async fn main() -> color_eyre::Result<()> {
     let db = Db::open(&db_path).await.map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
     info!("Database opened at {db_path}");
 
-    let client = SensorClient::start(ClientConfig::default()).map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
-    let mut readings = client.subscribe();
+    let client = Arc::new(SensorClient::start(ClientConfig::default()).map_err(|e| color_eyre::eyre::eyre!("{e}"))?);
     info!("Listening for sensor readings");
 
+    let port = std::env::var("CHLOROPHYLL_HTTP_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(DEFAULT_HTTP_PORT);
+
+    let state = AppState { client: client.clone(), db: db.clone() };
+    let router = sensor_server::router().with_state(state).merge(orbit_ui::assets_router());
+    tokio::spawn(async move {
+        if let Err(e) = orbit_service::serve(router, port).await {
+            error!("HTTP server error: {e}");
+        }
+    });
+
+    let mut readings = client.subscribe();
     loop {
         match readings.recv().await {
             Ok(reading) => {

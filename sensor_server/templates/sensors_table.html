@@ -1,0 +1,45 @@
+<table id="sensors-table" class="w-full text-left text-sm" hx-get="/partials/sensors-table" hx-trigger="every 5s" hx-swap="outerHTML">
+    <thead>
+        <tr class="text-night-owl-text/50">
+            <th class="pb-2 pr-4 font-mono text-xs uppercase tracking-widest">Name</th>
+            <th class="pb-2 pr-4 font-mono text-xs uppercase tracking-widest">Temp</th>
+            <th class="pb-2 pr-4 font-mono text-xs uppercase tracking-widest">Humidity</th>
+            <th class="pb-2 pr-4 font-mono text-xs uppercase tracking-widest">Light</th>
+            <th class="pb-2 font-mono text-xs uppercase tracking-widest">Last seen</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for row in rows %}
+        <tr class="border-t border-white/5">
+            <td class="py-2 pr-4 font-semibold">
+                <span class="flex items-center gap-2">
+                    <span class="o-dot bg-emerald-400 shadow-[0_0_8px_2px] shadow-emerald-400/40"></span>{{ row.name }}
+                </span>
+            </td>
+            <td class="py-2 pr-4 font-mono">
+                {% match row.temperature %}
+                {% when Some with (t) %}{{ t|fmt("{:.1}") }}&deg;C
+                {% when None %}&mdash;
+                {% endmatch %}
+            </td>
+            <td class="py-2 pr-4 font-mono">
+                {% match row.humidity %}
+                {% when Some with (h) %}{{ h|fmt("{:.1}") }}%
+                {% when None %}&mdash;
+                {% endmatch %}
+            </td>
+            <td class="py-2 pr-4 font-mono">
+                {% match row.light %}
+                {% when Some with (l) %}{{ l|fmt("{:.0}") }} lux
+                {% when None %}&mdash;
+                {% endmatch %}
+            </td>
+            <td class="py-2 font-mono text-night-owl-text/50">{{ row.age }}</td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="5" class="py-4 text-night-owl-text/50">No sensors seen yet.</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>

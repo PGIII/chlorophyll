@@ -5,7 +5,18 @@ edition = "2024"
 
 [dependencies]
 chlorophyll-client = { workspace = true, features = ["sqlite"] }
+orbit-service = { workspace = true }
+orbit-ui = { workspace = true }
 tokio = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+axum = { workspace = true }
+askama = { workspace = true }
 color-eyre = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+serde_json = { workspace = true }
