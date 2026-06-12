@@ -19,8 +19,8 @@ const REQUEST_INFO_INTERVAL: Duration = Duration::from_secs(30);
 fn bind_multicast(group: Ipv4Addr, port: u16) -> Result<UdpSocket> {
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, None)?;
     socket.set_reuse_address(true)?;
-    // SO_REUSEADDR alone is not enough on macOS/BSD for two processes (e.g. lambic and
-    // sensor_server on the same host) to share the multicast port.
+    // SO_REUSEADDR alone is not enough on macOS/BSD for two consumers on the same host
+    // to share the multicast port.
     #[cfg(unix)]
     socket.set_reuse_port(true)?;
     let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
@@ -34,7 +34,7 @@ fn bind_multicast(group: Ipv4Addr, port: u16) -> Result<UdpSocket> {
 /// Blocking receive loop, run on a dedicated thread.
 ///
 /// tokio's async UDP readiness for this multicast socket does not fire on macOS, so we
-/// use a blocking `recv_from` with a read timeout instead (see lambic's sensors/mod.rs).
+/// use a blocking `recv_from` with a read timeout instead.
 pub fn run(
     cfg: ClientConfig,
     registry: Arc<Mutex<Registry>>,
