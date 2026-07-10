@@ -19,10 +19,8 @@ exclude = [
 [workspace.dependencies]
 chlorophyll-protocol = { path = "chlorophyll-protocol" }
 chlorophyll-client = { path = "chlorophyll-client" }
-orbit-service = { path = "../orbit/crates/orbit-service" }
-orbit-ui = { path = "../orbit/crates/orbit-ui" }
 
-tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "time", "sync"] }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "time", "sync", "signal"] }
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }

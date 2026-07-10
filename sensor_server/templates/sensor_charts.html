@@ -1,11 +1,11 @@
-<div id="sensor-charts" class="grid grid-cols-1 gap-5 lg:grid-cols-3" hx-get="/partials/sensor-charts" hx-trigger="every 60s" hx-swap="outerHTML">
+<div id="sensor-charts" class="charts-grid">
     {% for chart in charts %}
-    <div class="o-card">
-        <p class="o-kicker mb-1">last 12h</p>
-        <h2 class="mb-3 text-lg font-bold tracking-tight">{{ chart.title }}</h2>
+    <div class="card">
+        <p class="kicker">last 12h</p>
+        <h2>{{ chart.title }}</h2>
         {% match chart.svg %}
         {% when Some with (svg) %}{{ svg|safe }}
-        {% when None %}<p class="text-sm text-night-owl-text/50">No data yet.</p>
+        {% when None %}<p class="muted">No data yet.</p>
         {% endmatch %}
     </div>
     {% endfor %}

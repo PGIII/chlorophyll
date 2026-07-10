@@ -6,13 +6,13 @@ pub mod state;
 pub mod svg;
 
 use axum::Router;
+use axum::routing::get;
 
 pub use state::AppState;
 
 /// Combined router for the JSON API and HTML dashboard.
-///
-/// Callers should `.with_state(state)` and then `.merge(orbit_ui::assets_router())`
-/// to add Orbit's shared static assets (which carry no state).
 pub fn router() -> Router<AppState> {
-    api::router().merge(dashboard::router())
+    api::router()
+        .merge(dashboard::router())
+        .route("/healthz", get(|| async { "ok" }))
 }

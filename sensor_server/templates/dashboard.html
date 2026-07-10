@@ -1,10 +1,57 @@
-<div class="mb-6">
-    <p class="o-kicker mb-1">greenhouse</p>
-    <h1 class="text-2xl font-bold tracking-tight">Sensors</h1>
-</div>
-
-<div class="o-card mb-6 overflow-x-auto">
-    {{ table|safe }}
-</div>
-
-{{ charts|safe }}
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="theme-color" content="#020a14" />
+        <title>Chlorophyll</title>
+        <style>
+            :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #020a14; color: #d6deeb; }
+            * { box-sizing: border-box; }
+            body { margin: 0; min-height: 100vh; background: radial-gradient(60rem 32rem at 70% -12%, #38cfe617, transparent), #020a14; }
+            header { position: sticky; top: 0; border-bottom: 1px solid #ffffff0d; background: #011627cc; backdrop-filter: blur(8px); }
+            header div, main { width: min(72rem, 100%); margin: 0 auto; padding: 1rem 1.5rem; }
+            header a { color: #38cfe6; font-size: 1.25rem; font-weight: 800; text-decoration: none; }
+            main { padding-top: 2rem; }
+            h1, h2, p { margin: 0; }
+            h1 { font-size: 1.5rem; }
+            h2 { margin-bottom: .75rem; font-size: 1.125rem; }
+            .kicker { margin-bottom: .25rem; color: #38cfe6b3; font: .75rem ui-monospace, monospace; letter-spacing: .2em; text-transform: uppercase; }
+            .card { margin-top: 1.5rem; overflow-x: auto; border: 1px solid #ffffff0d; border-radius: .75rem; background: #0b253ab3; padding: 1.25rem; }
+            .charts-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.25rem; }
+            .charts-grid .card { margin-top: 1.25rem; }
+            table { width: 100%; border-collapse: collapse; text-align: left; font-size: .875rem; }
+            th { padding: 0 1rem .5rem 0; color: #d6deeb80; font: .75rem ui-monospace, monospace; letter-spacing: .1em; text-transform: uppercase; }
+            td { border-top: 1px solid #ffffff0d; padding: .5rem 1rem .5rem 0; }
+            td:not(:first-child) { font-family: ui-monospace, monospace; }
+            .name { display: flex; align-items: center; gap: .5rem; font-weight: 600; }
+            .dot { width: .625rem; height: .625rem; border-radius: 999px; background: #34d399; box-shadow: 0 0 8px 2px #34d39966; }
+            .muted { color: #d6deeb80; }
+            .chart { display: block; width: 100%; height: auto; }
+            .chart-label { fill: #d6deeb66; font: 8px ui-monospace, monospace; }
+            .chart-axis { stroke: #ffffff1a; }
+            @media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
+        </style>
+        <script>
+            async function refresh(id, url) {
+                const current = document.getElementById(id);
+                if (!current) return;
+                try {
+                    const response = await fetch(url);
+                    if (response.ok) current.outerHTML = await response.text();
+                } catch (_) {}
+            }
+            setInterval(() => refresh("sensors-table", "/partials/sensors-table"), 5000);
+            setInterval(() => refresh("sensor-charts", "/partials/sensor-charts"), 60000);
+        </script>
+    </head>
+    <body>
+        <header><div><a href="/">Chlorophyll</a></div></header>
+        <main>
+            <p class="kicker">greenhouse</p>
+            <h1>Sensors</h1>
+            <div class="card">{{ table|safe }}</div>
+            {{ charts|safe }}
+        </main>
+    </body>
+</html>

@@ -100,7 +100,7 @@ async fn api_sensors_history_since_zero_returns_seeded_readings() {
 #[tokio::test]
 async fn dashboard_renders_table_and_charts() {
     let (state, _db) = test_state().await;
-    let router = sensor_server::router().with_state(state).merge(orbit_ui::assets_router());
+    let router = sensor_server::router().with_state(state);
 
     let response = router.oneshot(Request::builder().uri("/").body(Body::empty()).unwrap()).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);

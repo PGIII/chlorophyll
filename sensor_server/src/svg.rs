@@ -24,8 +24,16 @@ pub struct Series<'a> {
 /// `unit_suffix` is appended to the y-axis labels (e.g. `"°C"`, `"%"`, `"lux"`).
 /// Returns `None` if every series is empty (nothing to plot).
 #[must_use]
-pub fn line_chart(series: &[Series], from: DateTime<Utc>, to: DateTime<Utc>, unit_suffix: &str) -> Option<String> {
-    let all_values: Vec<f32> = series.iter().flat_map(|s| s.points.iter().map(|(_, v)| *v)).collect();
+pub fn line_chart(
+    series: &[Series],
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    unit_suffix: &str,
+) -> Option<String> {
+    let all_values: Vec<f32> = series
+        .iter()
+        .flat_map(|s| s.points.iter().map(|(_, v)| *v))
+        .collect();
     if all_values.is_empty() {
         return None;
     }
@@ -56,14 +64,21 @@ pub fn line_chart(series: &[Series], from: DateTime<Utc>, to: DateTime<Utc>, uni
     };
 
     let mut svg = String::new();
-    let _ = write!(svg, r#"<svg viewBox="0 0 {WIDTH} {HEIGHT}" class="w-full h-auto" preserveAspectRatio="none" role="img">"#);
+    let _ = write!(
+        svg,
+        r#"<svg viewBox="0 0 {WIDTH} {HEIGHT}" class="chart" preserveAspectRatio="none" role="img">"#
+    );
 
     // Y-axis labels (top, middle, bottom).
-    for (frac, value) in [(0.0, max_v), (0.5, f32::midpoint(min_v, max_v)), (1.0, min_v)] {
+    for (frac, value) in [
+        (0.0, max_v),
+        (0.5, f32::midpoint(min_v, max_v)),
+        (1.0, min_v),
+    ] {
         let y = PAD_TOP + frac * plot_h;
         let _ = write!(
             svg,
-            r#"<text x="2" y="{:.1}" class="fill-night-owl-text/40 text-[8px] font-mono">{:.0}{unit_suffix}</text>"#,
+            r#"<text x="2" y="{:.1}" class="chart-label">{:.0}{unit_suffix}</text>"#,
             y + 3.0,
             value,
         );
@@ -72,7 +87,7 @@ pub fn line_chart(series: &[Series], from: DateTime<Utc>, to: DateTime<Utc>, uni
     // Baseline axis.
     let _ = write!(
         svg,
-        r#"<line x1="{PAD_LEFT}" y1="{:.1}" x2="{:.1}" y2="{:.1}" class="stroke-white/10" stroke-width="1" />"#,
+        r#"<line x1="{PAD_LEFT}" y1="{:.1}" x2="{:.1}" y2="{:.1}" class="chart-axis" stroke-width="1" />"#,
         PAD_TOP + plot_h,
         WIDTH - PAD_RIGHT,
         PAD_TOP + plot_h,
@@ -89,10 +104,11 @@ pub fn line_chart(series: &[Series], from: DateTime<Utc>, to: DateTime<Utc>, uni
             }
             let _ = write!(path, "{:.1} {:.1}", x_for(*at), y_for(*value));
         }
+        let label = escape_xml_text(s.label);
         let _ = write!(
             svg,
             r#"<path d="{path}" fill="none" stroke="{}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"><title>{}</title></path>"#,
-            s.color, s.label,
+            s.color, label,
         );
     }
 
@@ -100,9 +116,50 @@ pub fn line_chart(series: &[Series], from: DateTime<Utc>, to: DateTime<Utc>, uni
     Some(svg)
 }
 
+fn escape_xml_text(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 /// Stable color for a sensor, cycling through a small accessible palette.
 #[must_use]
 pub fn series_color(index: usize) -> &'static str {
-    const PALETTE: &[&str] = &["#38cfe6", "#f59e0b", "#34d399", "#f472b6", "#a78bfa", "#fb7185"];
+    const PALETTE: &[&str] = &[
+        "#38cfe6", "#f59e0b", "#34d399", "#f472b6", "#a78bfa", "#fb7185",
+    ];
     PALETTE[index % PALETTE.len()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_chart_escapes_series_labels() {
+        let from = Utc::now();
+        let points = [(from, 1.0)];
+        let series = [Series {
+            label: r#"</title><script>alert('xss')</script><title>"#,
+            color: "#000",
+            points: &points,
+        }];
+
+        let chart =
+            line_chart(&series, from, from + chrono::Duration::seconds(1), "").expect("chart");
+
+        assert!(!chart.contains("<script>"));
+        assert!(chart.contains(
+            "&lt;/title&gt;&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;&lt;title&gt;"
+        ));
+    }
 }

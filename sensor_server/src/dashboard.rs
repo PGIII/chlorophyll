@@ -1,10 +1,10 @@
-//! HTML dashboard: sensor table + per-metric history charts, polled via htmx.
+//! HTML dashboard: sensor table + per-metric history charts with periodic refreshes.
 
 use askama::Template;
+use axum::Router;
 use axum::extract::State;
 use axum::response::Html;
 use axum::routing::get;
-use axum::Router;
 use chlorophyll_client::{DeviceInfo, ReadingKind};
 use chrono::Utc;
 
@@ -12,13 +12,6 @@ use crate::state::AppState;
 use crate::svg;
 
 const HISTORY_WINDOW_HOURS: i64 = 12;
-
-fn nav() -> Vec<orbit_ui::NavLink> {
-    vec![orbit_ui::NavLink {
-        label: "Sensors".to_string(),
-        href: "/".to_string(),
-    }]
-}
 
 pub struct SensorRow {
     pub name: String,
@@ -32,7 +25,10 @@ pub struct SensorRow {
 impl From<DeviceInfo> for SensorRow {
     fn from(device: DeviceInfo) -> Self {
         let id_hex = format!("{:032x}", device.id);
-        let name = device.name.clone().unwrap_or_else(|| format!("sensor {}", &id_hex[24..]));
+        let name = device
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("sensor {}", &id_hex[24..]));
         Self {
             name,
             id_hex,
@@ -103,7 +99,12 @@ async fn build_charts(state: &AppState) -> Result<Vec<MetricChart>, axum::http::
         .client
         .devices()
         .into_iter()
-        .map(|d| (format!("{:032x}", d.id), d.name.unwrap_or_else(|| format!("sensor {:032x}", d.id))))
+        .map(|d| {
+            (
+                format!("{:032x}", d.id),
+                d.name.unwrap_or_else(|| format!("sensor {:032x}", d.id)),
+            )
+        })
         .collect();
 
     let metrics = [
@@ -124,7 +125,11 @@ async fn build_charts(state: &AppState) -> Result<Vec<MetricChart>, axum::http::
         }
         let svg_series: Vec<svg::Series> = chart_series
             .into_iter()
-            .map(|(label, color, points)| svg::Series { label, color, points })
+            .map(|(label, color, points)| svg::Series {
+                label,
+                color,
+                points,
+            })
             .collect();
         let svg = svg::line_chart(&svg_series, from, now, unit);
         charts.push(MetricChart { title, svg });
@@ -148,12 +153,12 @@ async fn dashboard(State(state): State<AppState>) -> Result<Html<String>, axum::
         .render()
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let page = orbit_ui::render_page("Chlorophyll", &nav(), &body)
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Html(page))
+    Ok(Html(body))
 }
 
-async fn sensors_table_partial(State(state): State<AppState>) -> Result<Html<String>, axum::http::StatusCode> {
+async fn sensors_table_partial(
+    State(state): State<AppState>,
+) -> Result<Html<String>, axum::http::StatusCode> {
     let rows = build_rows(&state);
     let body = SensorsTableTemplate { rows }
         .render()
@@ -161,7 +166,9 @@ async fn sensors_table_partial(State(state): State<AppState>) -> Result<Html<Str
     Ok(Html(body))
 }
 
-async fn sensor_charts_partial(State(state): State<AppState>) -> Result<Html<String>, axum::http::StatusCode> {
+async fn sensor_charts_partial(
+    State(state): State<AppState>,
+) -> Result<Html<String>, axum::http::StatusCode> {
     let charts = build_charts(&state).await?;
     let body = SensorChartsTemplate { charts }
         .render()
