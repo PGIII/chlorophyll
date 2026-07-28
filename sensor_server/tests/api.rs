@@ -137,3 +137,116 @@ async fn dashboard_range_selects_window_and_falls_back_on_garbage() {
     let body = body_string(response).await;
     assert!(body.contains("last 24 hours"), "expected fallback to the default window: {body}");
 }
+
+/// `/api/sensors/history` must keep routing to the history handler rather than being
+/// swallowed by the `{id_hex}` route that shares its prefix.
+#[tokio::test]
+async fn history_path_is_not_captured_by_the_id_route() {
+    let (state, _db) = test_state().await;
+    let router = sensor_server::router().with_state(state);
+
+    let response = router
+        .oneshot(Request::builder().uri("/api/sensors/history?since=0").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let value: serde_json::Value = serde_json::from_str(&body_string(response).await).unwrap();
+    let series = value.as_array().expect("history returns an array of series");
+    assert!(
+        series.iter().all(|s| s.get("metric").is_some()),
+        "expected series objects, not a single sensor summary: {value}"
+    );
+}
+
+#[tokio::test]
+async fn single_sensor_endpoints_filter_and_404() {
+    let (state, _db) = test_state().await;
+    let router = sensor_server::router().with_state(state);
+    let seeded = format!("{:032x}", 1_u128);
+
+    let response = router
+        .clone()
+        .oneshot(Request::builder().uri(format!("/api/sensors/{seeded}/history?since=0")).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let value: serde_json::Value = serde_json::from_str(&body_string(response).await).unwrap();
+    let series = value.as_array().unwrap();
+    assert!(!series.is_empty(), "seeded sensor should have history: {value}");
+    assert!(
+        series.iter().all(|s| s["id_hex"] == seeded.as_str()),
+        "history must be filtered to the requested sensor: {value}"
+    );
+
+    // A well-formed but unseen id is a 404, not an empty 200.
+    let missing = format!("{:032x}", 999_u128);
+    let response = router
+        .clone()
+        .oneshot(Request::builder().uri(format!("/api/sensors/{missing}")).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    // Garbage that isn't hex is a client error.
+    let response = router
+        .oneshot(Request::builder().uri("/api/sensors/zzzz").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn history_bucket_is_bounded_even_for_a_huge_window() {
+    let (state, _db) = test_state().await;
+    let router = sensor_server::router().with_state(state);
+
+    // Ten years back: the auto-bucket must widen rather than return a point per minute.
+    let response = router
+        .oneshot(Request::builder().uri("/api/sensors/history?since=0").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let value: serde_json::Value = serde_json::from_str(&body_string(response).await).unwrap();
+    for s in value.as_array().unwrap() {
+        let bucket = s["bucket_secs"].as_i64().unwrap();
+        assert!(bucket >= 60, "bucket must not go below the stored resolution: {bucket}");
+        let points = s["points"].as_array().unwrap().len();
+        assert!(points <= 1000, "series should stay bounded, got {points} points");
+    }
+}
+
+#[tokio::test]
+async fn set_name_rejects_bad_input_before_touching_the_network() {
+    let (state, _db) = test_state().await;
+    let router = sensor_server::router().with_state(state);
+    let seeded = format!("{:032x}", 1_u128);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/sensors/{seeded}/name"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"name":"   "}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST, "blank names are rejected");
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sensors/nothex/name")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"name":"kitchen"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST, "unparseable id is rejected");
+}
