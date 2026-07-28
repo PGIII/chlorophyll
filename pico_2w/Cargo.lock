@@ -259,6 +259,12 @@ dependencies = [
 [[package]]
 name = "chlorophyll-sensor-lib"
 version = "0.1.0"
+dependencies = [
+ "embedded-storage",
+ "heapless 0.8.0",
+ "postcard",
+ "serde",
+]
 
 [[package]]
 name = "chlorophyll-ui"

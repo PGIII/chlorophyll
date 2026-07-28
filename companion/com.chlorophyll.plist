@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.chlorophyll</string>
+
+    <!-- Must run in the GUI (Aqua) session, not as a system daemon: the multicast
+         listener needs macOS Local Network access, which is only ever granted to a
+         process with a user session to prompt in. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/prestongarrisoniii/dev/source/chlorophyll/target/release/sensor_server</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/prestongarrisoniii/dev/source/chlorophyll</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>RUST_LOG</key>
+        <string>info</string>
+        <!-- Absolute so the sqlite file can't follow a stray working directory. -->
+        <key>CHLOROPHYLL_DB</key>
+        <string>/Users/prestongarrisoniii/dev/source/chlorophyll/data/chlorophyll.db</string>
+        <key>CHLOROPHYLL_HTTP_PORT</key>
+        <string>5001</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/prestongarrisoniii/dev/source/chlorophyll/data/server.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/prestongarrisoniii/dev/source/chlorophyll/data/server.err</string>
+</dict>
+</plist>
