@@ -1,0 +1,20 @@
+[package]
+name = "chlorophyll-client"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chlorophyll-protocol = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+socket2 = { version = "0.5", features = ["all"] }
+sqlx = { workspace = true, optional = true }
+
+[features]
+sqlite = ["dep:sqlx"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

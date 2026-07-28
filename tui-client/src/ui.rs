@@ -1,9 +1,13 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use chlorophyll_protocol::light::Light;
-use chlorophyll_protocol::temperature::Temperature;
+use chlorophyll_client::ReadingKind;
 use chrono::{DateTime, Local, Utc};
+
+/// Convert a canonical Celsius reading value to Fahrenheit for display.
+fn celsius_to_f(c: f32) -> f32 {
+    c * 9.0 / 5.0 + 32.0
+}
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -56,8 +60,8 @@ impl Widget for &App {
         let temperatures: Vec<(f64, f64)> = window
             .iter()
             .filter_map(|entry| {
-                if let chlorophyll_protocol::DataType::Temperature(t) = &entry.data_type {
-                    Some((entry.timestamp.timestamp() as f64, t.get_as_f() as f64))
+                if entry.kind == ReadingKind::Temperature {
+                    Some((entry.at.timestamp() as f64, celsius_to_f(entry.value) as f64))
                 } else {
                     None
                 }
@@ -67,8 +71,8 @@ impl Widget for &App {
         let humidities: Vec<(f64, f64)> = window
             .iter()
             .filter_map(|entry| {
-                if let chlorophyll_protocol::DataType::RelativeHumidity(h) = &entry.data_type {
-                    Some((entry.timestamp.timestamp() as f64, h.percent() as f64))
+                if entry.kind == ReadingKind::Humidity {
+                    Some((entry.at.timestamp() as f64, entry.value as f64))
                 } else {
                     None
                 }
@@ -78,8 +82,8 @@ impl Widget for &App {
         let lights: Vec<(f64, f64)> = window
             .iter()
             .filter_map(|entry| {
-                if let chlorophyll_protocol::DataType::Light(l) = &entry.data_type {
-                    Some((entry.timestamp.timestamp() as f64, l.get_as_lux() as f64))
+                if entry.kind == ReadingKind::Light {
+                    Some((entry.at.timestamp() as f64, entry.value as f64))
                 } else {
                     None
                 }
@@ -90,21 +94,21 @@ impl Widget for &App {
         let mut sensor_map: HashMap<u128, (Option<f32>, Option<f32>, Option<f32>, Option<DateTime<Utc>>)> = HashMap::new();
         for entry in self.last_reading.iter().rev() {
             let e = sensor_map.entry(entry.sensor_id).or_default();
-            match &entry.data_type {
-                chlorophyll_protocol::DataType::Temperature(t) if e.0.is_none() => {
-                    e.0 = Some(t.get_as_f());
+            match entry.kind {
+                ReadingKind::Temperature if e.0.is_none() => {
+                    e.0 = Some(celsius_to_f(entry.value));
                 }
-                chlorophyll_protocol::DataType::RelativeHumidity(h) if e.1.is_none() => {
-                    e.1 = Some(h.percent());
+                ReadingKind::Humidity if e.1.is_none() => {
+                    e.1 = Some(entry.value);
                 }
-                chlorophyll_protocol::DataType::Light(l) if e.2.is_none() => {
-                    e.2 = Some(l.get_as_lux());
+                ReadingKind::Light if e.2.is_none() => {
+                    e.2 = Some(entry.value);
                 }
                 _ => {}
             }
             // Record most-recent timestamp (first time we see this sensor when iterating rev)
             if e.3.is_none() {
-                e.3 = Some(entry.timestamp);
+                e.3 = Some(entry.at);
             }
         }
 
@@ -180,13 +184,13 @@ impl Widget for &App {
         // x_start = timestamp of the oldest reading, or 1 min before now if no data
         let x_start = window
             .first()
-            .map(|e| e.timestamp.timestamp() as f64)
+            .map(|e| e.at.timestamp() as f64)
             .unwrap_or(x_end - 60.0);
 
         let x_labels: Vec<Line> = vec![
             window
                 .first()
-                .map(|e| e.timestamp.with_timezone(&Local).format("%H:%M").to_string())
+                .map(|e| e.at.with_timezone(&Local).format("%H:%M").to_string())
                 .unwrap_or_else(|| "No data".into())
                 .bold()
                 .into(),

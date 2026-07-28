@@ -1,67 +1,92 @@
 #![warn(clippy::pedantic)]
 
-use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::sync::Arc;
 
-use sensor_server::db::Db;
-use sensor_server::{process_packets, request_sensor_info, send_set_name, MULTICAST_ADDR, PORT};
-use tokio::net::UdpSocket;
+use chlorophyll_client::db::Db;
+use chlorophyll_client::{ClientConfig, SensorClient};
+use sensor_server::AppState;
 use tracing::*;
+use tracing_subscriber::EnvFilter;
+
+const DEFAULT_HTTP_PORT: u16 = 5001;
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .init();
 
     let args: Vec<String> = std::env::args().collect();
 
-    // set-name <hex_id> <name> — send SetName directly to a known sensor
+    // set-name <hex_id> <name> — broadcast SetName to the multicast group
     if args.get(1).map(String::as_str) == Some("set-name") {
-        let id_hex = args.get(2).expect("usage: sensor_server set-name <hex_id> <name>");
-        let name = args.get(3).expect("usage: sensor_server set-name <hex_id> <name>");
+        let id_hex = args
+            .get(2)
+            .expect("usage: sensor_server set-name <hex_id> <name>");
+        let name = args
+            .get(3)
+            .expect("usage: sensor_server set-name <hex_id> <name>");
         let sensor_id = u128::from_str_radix(id_hex.trim_start_matches("0x"), 16)
             .expect("invalid sensor id hex");
 
-        // Bind, discover, wait for SensorsInfo to learn the sensor's address, then send unicast.
-        let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, PORT)).await?;
-        socket.join_multicast_v4(MULTICAST_ADDR, Ipv4Addr::UNSPECIFIED)?;
-        request_sensor_info(&socket).await?;
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        let mut known_devices = HashMap::new();
-        let mut sensor_names = HashMap::new();
-        process_packets(&socket, &mut known_devices, &mut sensor_names, &mut vec![]).await?;
-
-        let target = known_devices.get(&sensor_id).copied()
-            .expect("sensor not found — is it online?");
-        send_set_name(&socket, target, sensor_id, name).await?;
+        let client = SensorClient::start(ClientConfig::default())
+            .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
+        client
+            .set_name(sensor_id, name)
+            .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
+        info!("Sent SetName(\"{name}\") for sensor {sensor_id:032x}");
         return Ok(());
     }
 
     // Normal server mode
     let db_path = std::env::var("CHLOROPHYLL_DB").unwrap_or_else(|_| "chlorophyll.db".to_string());
-    let db = Db::open(&db_path).await?;
+    let db = Db::open(&db_path)
+        .await
+        .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
     info!("Database opened at {db_path}");
 
-    let socket_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, PORT);
-    let socket = UdpSocket::bind(socket_addr).await?;
-    socket.join_multicast_v4(MULTICAST_ADDR, Ipv4Addr::UNSPECIFIED)?;
-    info!("Listening on {}:{}", MULTICAST_ADDR, PORT);
+    let client = Arc::new(
+        SensorClient::start(ClientConfig::default()).map_err(|e| color_eyre::eyre::eyre!("{e}"))?,
+    );
+    info!("Listening for sensor readings");
 
-    request_sensor_info(&socket).await?;
+    let port = std::env::var("CHLOROPHYLL_HTTP_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(DEFAULT_HTTP_PORT);
 
-    let mut known_devices = HashMap::new();
-    let mut sensor_names: HashMap<u128, String> = HashMap::new();
+    let state = AppState {
+        client: client.clone(),
+        db: db.clone(),
+    };
+    let router = sensor_server::router().with_state(state);
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, port)).await?;
+    info!("Listening on http://{}", listener.local_addr()?);
 
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        let mut new_entries = Vec::new();
-        if let Err(e) = process_packets(&socket, &mut known_devices, &mut sensor_names, &mut new_entries).await {
-            error!("process_packets error: {e}");
-        }
-        for entry in &new_entries {
-            if let Err(e) = db.insert_entry(entry).await {
-                error!("DB insert error: {e}");
+    let mut readings = client.subscribe();
+    tokio::spawn(async move {
+        loop {
+            match readings.recv().await {
+                Ok(reading) => {
+                    if let Err(e) = db.insert_reading(&reading).await {
+                        error!("DB insert error: {e}");
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    warn!("readings channel lagged, dropped {n} messages");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
-    }
+    });
+
+    axum::serve(listener, router)
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+            info!("Shutting down");
+        })
+        .await?;
+
+    Ok(())
 }

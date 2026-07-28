@@ -1,0 +1,39 @@
+<table id="sensors-table">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Temp</th>
+            <th>Humidity</th>
+            <th>Light</th>
+            <th>Last seen</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for row in rows %}
+        <tr>
+            <td><span class="name"><span class="dot"></span>{{ row.name }}</span></td>
+            <td>
+                {% match row.temperature %}
+                {% when Some with (t) %}{{ t|fmt("{:.1}") }}&deg;C
+                {% when None %}&mdash;
+                {% endmatch %}
+            </td>
+            <td>
+                {% match row.humidity %}
+                {% when Some with (h) %}{{ h|fmt("{:.1}") }}%
+                {% when None %}&mdash;
+                {% endmatch %}
+            </td>
+            <td>
+                {% match row.light %}
+                {% when Some with (l) %}{{ l|fmt("{:.0}") }} lux
+                {% when None %}&mdash;
+                {% endmatch %}
+            </td>
+            <td class="muted">{{ row.age }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="muted">No sensors seen yet.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>

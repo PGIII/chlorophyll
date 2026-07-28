@@ -1,0 +1,12 @@
+<div id="sensor-charts" class="charts-grid">
+    {% for chart in charts %}
+    <div class="card">
+        <p class="kicker">last 12h</p>
+        <h2>{{ chart.title }}</h2>
+        {% match chart.svg %}
+        {% when Some with (svg) %}{{ svg|safe }}
+        {% when None %}<p class="muted">No data yet.</p>
+        {% endmatch %}
+    </div>
+    {% endfor %}
+</div>

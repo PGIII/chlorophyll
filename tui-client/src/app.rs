@@ -1,17 +1,14 @@
-use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-
 use crate::event::{AppEvent, Event, EventHandler};
 use crate::log_widget::LogState;
+use chlorophyll_client::db::Db;
+use chlorophyll_client::{ClientConfig, Reading, SensorClient};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
-use sensor_server::{process_packets, DataEntry, MULTICAST_ADDR, MAX_READINGS, PORT};
-use sensor_server::db::Db;
-
-/// Re-join the multicast group every ~10 s to send a fresh IGMP membership report.
-const REJOIN_TICKS: u64 = 300;
-use tokio::net::UdpSocket;
+use tokio::sync::broadcast;
 use tracing::*;
+
+/// Keep up to ~24 h of readings at ~1 reading/sensor/5 s (generous headroom).
+const MAX_READINGS: usize = 100_000;
 
 /// Application.
 #[derive(Debug)]
@@ -23,14 +20,11 @@ pub struct App {
     /// Event handler.
     pub events: EventHandler,
 
-    pub socket: Option<UdpSocket>,
+    pub client: Option<SensorClient>,
+    pub readings_rx: Option<broadcast::Receiver<Reading>>,
     pub db: Option<Db>,
-    pub last_reading: Vec<DataEntry>,
+    pub last_reading: Vec<Reading>,
     pub log_state: LogState,
-
-    /// Known devices: sensor_id → source socket address
-    pub known_devices: HashMap<u128, SocketAddr>,
-    tick_count: u64,
 }
 
 impl Default for App {
@@ -39,12 +33,11 @@ impl Default for App {
             running: true,
             counter: 0,
             events: EventHandler::new(),
-            socket: None,
+            client: None,
+            readings_rx: None,
             db: None,
             last_reading: Vec::new(),
             log_state: LogState::new(true),
-            known_devices: HashMap::new(),
-            tick_count: 0,
         }
     }
 }
@@ -52,17 +45,7 @@ impl Default for App {
 impl App {
     /// Constructs a new instance of [`App`].
     pub fn new(log_state: LogState) -> Self {
-        Self {
-            running: true,
-            counter: 0,
-            events: EventHandler::new(),
-            socket: None,
-            db: None,
-            last_reading: Vec::new(),
-            log_state,
-            known_devices: HashMap::new(),
-            tick_count: 0,
-        }
+        Self { log_state, ..Self::default() }
     }
 
     /// Run the application's main loop.
@@ -72,16 +55,17 @@ impl App {
         match Db::open(&db_path).await {
             Ok(db) => {
                 info!("Database opened at {db_path}");
-                match db.load_all().await {
-                    Ok(history) => {
-                        info!("Loaded {} historical readings", history.len());
-                        self.last_reading = history;
-                    }
-                    Err(e) => error!("Failed to load history: {e}"),
-                }
                 self.db = Some(db);
             }
             Err(e) => error!("Failed to open database at {db_path}: {e}"),
+        }
+
+        match SensorClient::start(ClientConfig::default()) {
+            Ok(client) => {
+                self.readings_rx = Some(client.subscribe());
+                self.client = Some(client);
+            }
+            Err(e) => error!("Failed to start sensor client: {e}"),
         }
 
         while self.running {
@@ -148,54 +132,34 @@ impl App {
 
     /// Handles the tick event of the terminal.
     pub async fn tick(&mut self) {
-        self.tick_count = self.tick_count.wrapping_add(1);
+        self.counter = self.counter.wrapping_add(1);
 
-        if let Some(sock) = &self.socket {
-            // Periodically leave and rejoin the multicast group to send a fresh IGMP
-            // membership report. A plain join on an already-joined socket is rejected
-            // with EADDRINUSE; leave+join is the only way to trigger a new report and
-            // prevent the router from timing out our group membership.
-            if self.tick_count % REJOIN_TICKS == 0 {
-                sock.leave_multicast_v4(MULTICAST_ADDR, Ipv4Addr::UNSPECIFIED).ok();
-                if let Err(e) = sock.join_multicast_v4(MULTICAST_ADDR, Ipv4Addr::UNSPECIFIED) {
-                    error!("Failed to rejoin multicast group: {e}");
-                }
-            }
+        let Some(rx) = self.readings_rx.as_mut() else { return };
 
-            let mut new_entries = Vec::new();
-            if let Err(e) =
-                process_packets(sock, &mut self.known_devices, &mut new_entries).await
-            {
-                error!("process_packets error: {e}");
+        let mut new_readings = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(reading) => new_readings.push(reading),
+                Err(broadcast::error::TryRecvError::Empty) => break,
+                Err(broadcast::error::TryRecvError::Lagged(n)) => {
+                    warn!("readings channel lagged, dropped {n} messages");
+                }
+                Err(broadcast::error::TryRecvError::Closed) => break,
             }
-            if let Some(db) = &self.db {
-                for entry in &new_entries {
-                    if let Err(e) = db.insert_entry(entry).await {
-                        error!("DB insert error: {e}");
-                    }
+        }
+
+        if let Some(db) = &self.db {
+            for reading in &new_readings {
+                if let Err(e) = db.insert_reading(reading).await {
+                    error!("DB insert error: {e}");
                 }
             }
-            self.last_reading.extend(new_entries);
-            if self.last_reading.len() > MAX_READINGS {
-                let excess = self.last_reading.len() - MAX_READINGS;
-                self.last_reading.drain(..excess);
-            }
-        } else {
-            info!("No socket, setting up");
-            let socket_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, PORT);
-            match UdpSocket::bind(socket_addr).await {
-                Ok(sock) => {
-                    if let Err(e) = sock.join_multicast_v4(MULTICAST_ADDR, Ipv4Addr::UNSPECIFIED) {
-                        error!("Couldn't join multicast group: {e}");
-                        return;
-                    }
-                    info!("Joined multicast {}:{}", MULTICAST_ADDR, PORT);
-                    self.socket = Some(sock);
-                }
-                Err(e) => {
-                    error!("Couldn't open socket: {e}");
-                }
-            }
+        }
+
+        self.last_reading.extend(new_readings);
+        if self.last_reading.len() > MAX_READINGS {
+            let excess = self.last_reading.len() - MAX_READINGS;
+            self.last_reading.drain(..excess);
         }
     }
 
