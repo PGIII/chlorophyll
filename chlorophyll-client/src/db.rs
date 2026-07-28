@@ -29,20 +29,37 @@ impl Db {
         )
         .execute(&pool)
         .await?;
+
+        // Resolution of each row, in seconds; 0 marks pre-rollup rows written at the raw
+        // sensor rate. Compaction uses it to tell which rows still need coarsening.
+        // ALTER fails once the column exists, which is the normal case after first run.
+        let _ = sqlx::query("ALTER TABLE readings ADD COLUMN bucket_secs INTEGER NOT NULL DEFAULT 0")
+            .execute(&pool)
+            .await;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_readings_bucket ON readings (bucket_secs, timestamp)")
+            .execute(&pool)
+            .await?;
+
         Ok(Self(pool))
     }
 
     pub async fn insert_reading(&self, reading: &Reading) -> anyhow::Result<()> {
+        self.insert_reading_at(reading, 0).await
+    }
+
+    /// Insert a reading already averaged over a `bucket_secs`-wide window.
+    pub async fn insert_reading_at(&self, reading: &Reading, bucket_secs: i64) -> anyhow::Result<()> {
         let sensor_id = format!("{:032x}", reading.sensor_id);
         let timestamp = reading.at.to_rfc3339();
         sqlx::query(
-            "INSERT INTO readings (sensor_id, timestamp, data_type, value)
-             VALUES (?, ?, ?, ?)",
+            "INSERT INTO readings (sensor_id, timestamp, data_type, value, bucket_secs)
+             VALUES (?, ?, ?, ?, ?)",
         )
         .bind(&sensor_id)
         .bind(&timestamp)
         .bind(reading.kind.as_str())
         .bind(f64::from(reading.value))
+        .bind(bucket_secs)
         .execute(&self.0)
         .await?;
         Ok(())
@@ -137,6 +154,83 @@ impl Db {
     }
 }
 
+/// One rung of the retention ladder: rows older than `older_than_secs` are averaged down
+/// to at most one point per `bucket_secs`.
+#[derive(Debug, Clone, Copy)]
+pub struct RetentionTier {
+    pub older_than_secs: i64,
+    pub bucket_secs: i64,
+}
+
+/// Progressive retention, finest first. Storage per sensor settles around 47k rows
+/// instead of growing without bound at ~1.3M rows/day.
+///
+/// The first rung exists to collapse pre-rollup rows (`bucket_secs = 0`, written at the
+/// raw ~5 Hz sensor rate) down to the ingest resolution.
+pub const DEFAULT_TIERS: &[RetentionTier] = &[
+    RetentionTier { older_than_secs: 3_600, bucket_secs: 60 },           // > 1h   -> 1 min
+    RetentionTier { older_than_secs: 172_800, bucket_secs: 300 },        // > 48h  -> 5 min
+    RetentionTier { older_than_secs: 1_209_600, bucket_secs: 3_600 },    // > 14d  -> 1 hour
+    RetentionTier { older_than_secs: 31_536_000, bucket_secs: 86_400 },  // > 1y   -> 1 day
+];
+
+impl Db {
+    /// Apply `tiers` as of `now`, returning how many rows were removed.
+    ///
+    /// Tiers are applied coarsest first so an old row is rewritten once rather than once
+    /// per rung. Each pass is idempotent: rows already at or beyond a rung's resolution
+    /// fail its `bucket_secs <` predicate and are skipped.
+    pub async fn compact(
+        &self,
+        now: DateTime<Utc>,
+        tiers: &[RetentionTier],
+    ) -> anyhow::Result<u64> {
+        let mut removed = 0;
+
+        for tier in tiers.iter().rev() {
+            let cutoff = (now - chrono::Duration::seconds(tier.older_than_secs)).to_rfc3339();
+            let bucket = tier.bucket_secs.max(1);
+
+            let mut tx = self.0.begin().await?;
+
+            // Write the averaged replacements first. They carry the tier's bucket_secs, so
+            // the DELETE below — which only matches strictly finer rows — cannot reap them.
+            sqlx::query(
+                "INSERT INTO readings (sensor_id, timestamp, data_type, value, bucket_secs)
+                 SELECT sensor_id,
+                        strftime('%Y-%m-%dT%H:%M:%S+00:00',
+                                 CAST(strftime('%s', timestamp) AS INTEGER) / ?1 * ?1,
+                                 'unixepoch'),
+                        data_type,
+                        AVG(value),
+                        ?1
+                 FROM readings
+                 WHERE timestamp < ?2 AND bucket_secs < ?1
+                 GROUP BY sensor_id, data_type,
+                          CAST(strftime('%s', timestamp) AS INTEGER) / ?1",
+            )
+            .bind(bucket)
+            .bind(&cutoff)
+            .execute(&mut *tx)
+            .await?;
+
+            let deleted = sqlx::query(
+                "DELETE FROM readings WHERE timestamp < ?2 AND bucket_secs < ?1",
+            )
+            .bind(bucket)
+            .bind(&cutoff)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+
+            tx.commit().await?;
+            removed += deleted;
+        }
+
+        Ok(removed)
+    }
+}
+
 fn parse_kind(data_type: &str) -> anyhow::Result<ReadingKind> {
     match data_type {
         "temperature" => Ok(ReadingKind::Temperature),
@@ -193,5 +287,169 @@ mod tests {
             p.push(suffix);
             let _ = std::fs::remove_file(p);
         }
+    }
+}
+
+#[cfg(test)]
+mod compaction_tests {
+    use super::*;
+
+    async fn temp_db(tag: &str) -> (Db, std::path::PathBuf) {
+        let path = std::env::temp_dir().join(format!(
+            "chlorophyll-compact-{}-{tag}.db",
+            std::process::id()
+        ));
+        for suffix in ["", "-wal", "-shm"] {
+            let mut p = path.clone().into_os_string();
+            p.push(suffix);
+            let _ = std::fs::remove_file(p);
+        }
+        let db = Db::open(path.to_str().unwrap()).await.unwrap();
+        (db, path)
+    }
+
+    fn cleanup(path: &std::path::Path) {
+        for suffix in ["", "-wal", "-shm"] {
+            let mut p = path.to_path_buf().into_os_string();
+            p.push(suffix);
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    async fn count(db: &Db) -> i64 {
+        sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM readings")
+            .fetch_one(&db.0)
+            .await
+            .unwrap()
+            .0
+    }
+
+    #[tokio::test]
+    async fn compaction_coarsens_old_rows_and_leaves_recent_ones_alone() {
+        let (db, path) = temp_db("ladder").await;
+        let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+
+        // 120 raw readings spread over two hours, ending 3h ago: all past the 1h rung.
+        for i in 0..120 {
+            db.insert_reading(&Reading {
+                sensor_id: 1,
+                kind: ReadingKind::Temperature,
+                value: 20.0,
+                at: now - chrono::Duration::minutes(180 - i),
+            })
+            .await
+            .unwrap();
+        }
+        // 10 raw readings inside the last 10 minutes: must survive untouched.
+        for i in 0..10 {
+            db.insert_reading(&Reading {
+                sensor_id: 1,
+                kind: ReadingKind::Temperature,
+                value: 30.0,
+                at: now - chrono::Duration::minutes(i),
+            })
+            .await
+            .unwrap();
+        }
+        assert_eq!(count(&db).await, 130);
+
+        let removed = db.compact(now, DEFAULT_TIERS).await.unwrap();
+        assert!(removed > 0, "expected the old rows to be coarsened");
+
+        let recent = sqlx::query_as::<_, (i64,)>(
+            "SELECT COUNT(*) FROM readings WHERE bucket_secs = 0",
+        )
+        .fetch_one(&db.0)
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(recent, 10, "rows inside the finest rung stay at full resolution");
+
+        // The two hours of 1/minute readings collapse to one row per minute.
+        let coarsened = sqlx::query_as::<_, (i64,)>(
+            "SELECT COUNT(*) FROM readings WHERE bucket_secs = 60",
+        )
+        .fetch_one(&db.0)
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(coarsened, 120, "one row per minute bucket");
+
+        cleanup(&path);
+    }
+
+    #[tokio::test]
+    async fn compaction_is_idempotent_and_preserves_the_mean() {
+        let (db, path) = temp_db("idempotent").await;
+        let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        // Align to a minute boundary so all four readings land in one bucket.
+        let old = DateTime::from_timestamp(
+            (now - chrono::Duration::hours(3)).timestamp() / 60 * 60,
+            0,
+        )
+        .unwrap();
+
+        // Four readings inside a single minute, averaging 25.
+        for (offset, value) in [(0, 10.0), (15, 20.0), (30, 30.0), (45, 40.0)] {
+            db.insert_reading(&Reading {
+                sensor_id: 1,
+                kind: ReadingKind::Temperature,
+                value,
+                at: old + chrono::Duration::seconds(offset),
+            })
+            .await
+            .unwrap();
+        }
+
+        assert!(db.compact(now, DEFAULT_TIERS).await.unwrap() > 0);
+        assert_eq!(count(&db).await, 1, "one minute bucket remains");
+
+        let (value,) = sqlx::query_as::<_, (f64,)>("SELECT value FROM readings")
+            .fetch_one(&db.0)
+            .await
+            .unwrap();
+        assert!((value - 25.0).abs() < 0.001, "got {value}");
+
+        // Running again must be a no-op rather than re-averaging or deleting.
+        assert_eq!(db.compact(now, DEFAULT_TIERS).await.unwrap(), 0);
+        assert_eq!(count(&db).await, 1);
+
+        cleanup(&path);
+    }
+
+    #[tokio::test]
+    async fn year_old_data_collapses_to_daily_points() {
+        let (db, path) = temp_db("yearly").await;
+        let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        // Align to a day boundary so the readings cover exactly two daily buckets.
+        let ancient = DateTime::from_timestamp(
+            (now - chrono::Duration::days(400)).timestamp() / 86_400 * 86_400,
+            0,
+        )
+        .unwrap();
+
+        // 48 readings across two days, over a year old.
+        for i in 0..48 {
+            db.insert_reading(&Reading {
+                sensor_id: 1,
+                kind: ReadingKind::Temperature,
+                value: 20.0,
+                at: ancient + chrono::Duration::hours(i),
+            })
+            .await
+            .unwrap();
+        }
+
+        db.compact(now, DEFAULT_TIERS).await.unwrap();
+
+        let rows = sqlx::query_as::<_, (i64, i64)>(
+            "SELECT bucket_secs, COUNT(*) FROM readings GROUP BY bucket_secs",
+        )
+        .fetch_all(&db.0)
+        .await
+        .unwrap();
+        assert_eq!(rows, vec![(86_400, 2)], "two days -> two daily averages");
+
+        cleanup(&path);
     }
 }

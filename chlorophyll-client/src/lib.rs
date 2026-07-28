@@ -7,6 +7,7 @@ pub mod db;
 pub mod listener;
 pub mod reading;
 pub mod registry;
+pub mod rollup;
 
 pub use client::SensorClient;
 pub use config::ClientConfig;
