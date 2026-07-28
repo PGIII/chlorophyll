@@ -5,12 +5,12 @@ use std::fmt::Write;
 use chlorophyll_client::db::Point;
 use chrono::{DateTime, Utc};
 
-const WIDTH: f64 = 600.0;
-const HEIGHT: f64 = 160.0;
-const PAD_LEFT: f64 = 36.0;
-const PAD_RIGHT: f64 = 8.0;
-const PAD_TOP: f64 = 8.0;
-const PAD_BOTTOM: f64 = 20.0;
+const WIDTH: f64 = 1000.0;
+const HEIGHT: f64 = 300.0;
+const PAD_LEFT: f64 = 52.0;
+const PAD_RIGHT: f64 = 16.0;
+const PAD_TOP: f64 = 14.0;
+const PAD_BOTTOM: f64 = 30.0;
 
 /// A named series of points to plot as one polyline.
 pub struct Series<'a> {
@@ -69,18 +69,21 @@ pub fn line_chart(
         r#"<svg viewBox="0 0 {WIDTH} {HEIGHT}" class="chart" preserveAspectRatio="none" role="img">"#
     );
 
-    // Y-axis labels (top, middle, bottom).
-    for (frac, value) in [
-        (0.0, max_v),
-        (0.5, f32::midpoint(min_v, max_v)),
-        (1.0, min_v),
-    ] {
+    // Horizontal gridlines with y-axis labels (top, quarters, middle, bottom).
+    for step in 0..=4 {
+        let frac = f64::from(step) / 4.0;
         let y = PAD_TOP + frac * plot_h;
+        let value = f64::from(max_v) - (f64::from(max_v) - f64::from(min_v)) * frac;
         let _ = write!(
             svg,
-            r#"<text x="2" y="{:.1}" class="chart-label">{:.0}{unit_suffix}</text>"#,
-            y + 3.0,
-            value,
+            r#"<line x1="{PAD_LEFT}" y1="{y:.1}" x2="{:.1}" y2="{y:.1}" class="chart-grid" stroke-width="1" />"#,
+            WIDTH - PAD_RIGHT,
+        );
+        let _ = write!(
+            svg,
+            r#"<text x="{:.1}" y="{:.1}" class="chart-label" text-anchor="end">{value:.1}{unit_suffix}</text>"#,
+            PAD_LEFT - 8.0,
+            y + 4.0,
         );
     }
 
@@ -92,6 +95,32 @@ pub fn line_chart(
         WIDTH - PAD_RIGHT,
         PAD_TOP + plot_h,
     );
+
+    // X-axis time labels; the format widens with the window so multi-day ranges stay legible.
+    let span_minutes = (to - from).num_minutes();
+    let time_fmt = if span_minutes > 72 * 60 {
+        "%b %-d"
+    } else if span_minutes > 24 * 60 {
+        "%b %-d %H:%M"
+    } else {
+        "%H:%M"
+    };
+    for step in 0..=4 {
+        let frac = f64::from(step) / 4.0;
+        let at = from + (to - from) * step / 4;
+        let anchor = match step {
+            0 => "start",
+            4 => "end",
+            _ => "middle",
+        };
+        let _ = write!(
+            svg,
+            r#"<text x="{:.1}" y="{:.1}" class="chart-label" text-anchor="{anchor}">{}</text>"#,
+            PAD_LEFT + frac * plot_w,
+            HEIGHT - 10.0,
+            at.format(time_fmt),
+        );
+    }
 
     for s in series {
         if s.points.is_empty() {
@@ -107,7 +136,7 @@ pub fn line_chart(
         let label = escape_xml_text(s.label);
         let _ = write!(
             svg,
-            r#"<path d="{path}" fill="none" stroke="{}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"><title>{}</title></path>"#,
+            r#"<path d="{path}" fill="none" stroke="{}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><title>{}</title></path>"#,
             s.color, label,
         );
     }
@@ -135,7 +164,7 @@ fn escape_xml_text(value: &str) -> String {
 #[must_use]
 pub fn series_color(index: usize) -> &'static str {
     const PALETTE: &[&str] = &[
-        "#38cfe6", "#f59e0b", "#34d399", "#f472b6", "#a78bfa", "#fb7185",
+        "#6ee7a0", "#e8c05a", "#4fbfa4", "#d9825f", "#a3d977", "#c98bd9",
     ];
     PALETTE[index % PALETTE.len()]
 }

@@ -3,39 +3,54 @@
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="theme-color" content="#020a14" />
+        <meta name="theme-color" content="#071009" />
         <title>Chlorophyll</title>
         <style>
-            :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #020a14; color: #d6deeb; }
+            :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #071009; color: #dbe9dc; }
             * { box-sizing: border-box; }
-            body { margin: 0; min-height: 100vh; background: radial-gradient(60rem 32rem at 70% -12%, #38cfe617, transparent), #020a14; }
-            header { position: sticky; top: 0; border-bottom: 1px solid #ffffff0d; background: #011627cc; backdrop-filter: blur(8px); }
-            header div, main { width: min(72rem, 100%); margin: 0 auto; padding: 1rem 1.5rem; }
-            header a { color: #38cfe6; font-size: 1.25rem; font-weight: 800; text-decoration: none; }
-            main { padding-top: 2rem; }
+            body {
+                margin: 0; min-height: 100vh;
+                background:
+                    radial-gradient(50rem 28rem at 82% -10%, #6ee7a01f, transparent),
+                    radial-gradient(38rem 24rem at 8% 4%, #a3d9771a, transparent),
+                    #071009;
+            }
+            header { position: sticky; top: 0; z-index: 10; border-bottom: 1px solid #ffffff0d; background: #0c1a10cc; backdrop-filter: blur(8px); }
+            header div, main { width: min(80rem, 100%); margin: 0 auto; padding: 1rem 1.5rem; }
+            header a { display: inline-flex; align-items: center; gap: .55rem; color: #6ee7a0; font-size: 1.25rem; font-weight: 800; letter-spacing: -.01em; text-decoration: none; }
+            header svg { width: 1.5rem; height: 1.5rem; }
+            main { padding-top: 2rem; padding-bottom: 3rem; }
             h1, h2, p { margin: 0; }
-            h1 { font-size: 1.5rem; }
-            h2 { margin-bottom: .75rem; font-size: 1.125rem; }
-            .kicker { margin-bottom: .25rem; color: #38cfe6b3; font: .75rem ui-monospace, monospace; letter-spacing: .2em; text-transform: uppercase; }
-            .card { margin-top: 1.5rem; overflow-x: auto; border: 1px solid #ffffff0d; border-radius: .75rem; background: #0b253ab3; padding: 1.25rem; }
-            .charts-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.25rem; }
-            .charts-grid .card { margin-top: 1.25rem; }
+            h1 { font-size: 1.5rem; letter-spacing: -.01em; }
+            h2 { margin-bottom: 1rem; font-size: 1.0625rem; display: flex; align-items: baseline; gap: .6rem; }
+            .kicker { margin-bottom: .25rem; color: #6ee7a0b3; font: .75rem ui-monospace, monospace; letter-spacing: .2em; text-transform: uppercase; }
+            .card { margin-top: 1.25rem; overflow-x: auto; border: 1px solid #ffffff0d; border-radius: .875rem; background: #102618b3; padding: 1.25rem 1.5rem 1rem; }
+            .range-bar { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: .75rem; margin-top: 2.25rem; }
+            .range-tabs { display: flex; flex-wrap: wrap; gap: .375rem; }
+            .range-tab { border: 1px solid #ffffff12; border-radius: 999px; padding: .3rem .85rem; color: #dbe9dcb3; font-size: .8125rem; font-weight: 600; text-decoration: none; transition: background .15s, color .15s, border-color .15s; }
+            .range-tab:hover { border-color: #6ee7a04d; color: #dbe9dc; }
+            .range-tab.is-active { border-color: #6ee7a066; background: #6ee7a01f; color: #6ee7a0; }
+            .range-note { font-size: .75rem; font-weight: 400; font-family: ui-monospace, monospace; }
             table { width: 100%; border-collapse: collapse; text-align: left; font-size: .875rem; }
-            th { padding: 0 1rem .5rem 0; color: #d6deeb80; font: .75rem ui-monospace, monospace; letter-spacing: .1em; text-transform: uppercase; }
-            td { border-top: 1px solid #ffffff0d; padding: .5rem 1rem .5rem 0; }
+            th { padding: 0 1rem .5rem 0; color: #dbe9dc80; font: .75rem ui-monospace, monospace; letter-spacing: .1em; text-transform: uppercase; }
+            td { border-top: 1px solid #ffffff0d; padding: .625rem 1rem .625rem 0; }
             td:not(:first-child) { font-family: ui-monospace, monospace; }
             .name { display: flex; align-items: center; gap: .5rem; font-weight: 600; }
-            .dot { width: .625rem; height: .625rem; border-radius: 999px; background: #34d399; box-shadow: 0 0 8px 2px #34d39966; }
-            .muted { color: #d6deeb80; }
+            .dot { width: .625rem; height: .625rem; border-radius: 999px; background: #6ee7a0; box-shadow: 0 0 8px 2px #6ee7a066; }
+            .muted { color: #dbe9dc80; }
             .chart { display: block; width: 100%; height: auto; }
-            .chart-label { fill: #d6deeb66; font: 8px ui-monospace, monospace; }
-            .chart-axis { stroke: #ffffff1a; }
-            @media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
+            .chart-label { fill: #dbe9dc73; font: 11px ui-monospace, monospace; }
+            .chart-axis { stroke: #ffffff26; }
+            .chart-grid { stroke: #ffffff0f; }
+            @media (max-width: 600px) { header div, main { padding-inline: 1rem; } .card { padding-inline: 1rem; } }
         </style>
         <script>
-            async function refresh(id, url) {
+            async function refresh(id, path) {
                 const current = document.getElementById(id);
                 if (!current) return;
+                // Carry the selected range through, so polling doesn't snap back to the default.
+                const range = document.getElementById("sensor-charts")?.dataset.range;
+                const url = range ? `${path}?range=${encodeURIComponent(range)}` : path;
                 try {
                     const response = await fetch(url);
                     if (response.ok) current.outerHTML = await response.text();
@@ -46,7 +61,18 @@
         </script>
     </head>
     <body>
-        <header><div><a href="/">Chlorophyll</a></div></header>
+        <header>
+            <div>
+                <a href="/?range={{ range_key }}">
+                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M12 21c0-6.5 3.2-10.4 8-11.5-.4 6.8-3.6 10.4-8 11.5Z" fill="currentColor" opacity=".9" />
+                        <path d="M12 21C7.6 19.9 4.4 16.3 4 9.5 8.8 10.6 12 14.5 12 21Z" fill="currentColor" opacity=".5" />
+                        <path d="M12 21V13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                    </svg>
+                    Chlorophyll
+                </a>
+            </div>
+        </header>
         <main>
             <p class="kicker">greenhouse</p>
             <h1>Sensors</h1>

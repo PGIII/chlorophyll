@@ -109,3 +109,31 @@ async fn dashboard_renders_table_and_charts() {
     assert!(body.contains("<table"), "expected a sensor table: {body}");
     assert!(body.contains("<svg"), "expected at least one chart svg: {body}");
 }
+
+#[tokio::test]
+async fn dashboard_range_selects_window_and_falls_back_on_garbage() {
+    let (state, _db) = test_state().await;
+    let router = sensor_server::router().with_state(state);
+
+    let response = router
+        .clone()
+        .oneshot(Request::builder().uri("/?range=7d").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response).await;
+    assert!(body.contains("last 7 days"), "expected the 7d window to be selected: {body}");
+    assert!(
+        body.contains(r#"href="/?range=30d""#),
+        "expected every range to stay reachable: {body}"
+    );
+
+    // An unknown range must fall back to the default rather than erroring.
+    let response = router
+        .oneshot(Request::builder().uri("/?range=nonsense").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response).await;
+    assert!(body.contains("last 24 hours"), "expected fallback to the default window: {body}");
+}

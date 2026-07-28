@@ -1,8 +1,15 @@
-<div id="sensor-charts" class="charts-grid">
+<div id="sensor-charts" data-range="{{ range_key }}">
+    <div class="range-bar">
+        <p class="kicker">history</p>
+        <div class="range-tabs">
+            {% for r in ranges %}
+            <a class="range-tab{% if r.key == range_key %} is-active{% endif %}" href="/?range={{ r.key }}">{{ r.label }}</a>
+            {% endfor %}
+        </div>
+    </div>
     {% for chart in charts %}
     <div class="card">
-        <p class="kicker">last 12h</p>
-        <h2>{{ chart.title }}</h2>
+        <h2>{{ chart.title }} <span class="muted range-note">last {{ range_label }}</span></h2>
         {% match chart.svg %}
         {% when Some with (svg) %}{{ svg|safe }}
         {% when None %}<p class="muted">No data yet.</p>
