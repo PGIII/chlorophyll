@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use chlorophyll_client::db::Db;
+use chlorophyll_client::rollup::{INGEST_BUCKET_SECS, ReadingAggregator};
 use chlorophyll_client::{ClientConfig, SensorClient};
+use chrono::Utc;
 use sensor_server::AppState;
 use tracing::*;
 use tracing_subscriber::EnvFilter;
@@ -64,19 +66,53 @@ async fn main() -> color_eyre::Result<()> {
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, port)).await?;
     info!("Listening on http://{}", listener.local_addr()?);
 
+    // Compact once at startup so a restart also catches up any backlog, then hourly.
+    {
+        let db = db.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                ticker.tick().await;
+                match db.compact(Utc::now(), chlorophyll_client::db::DEFAULT_TIERS).await {
+                    Ok(0) => {}
+                    Ok(removed) => info!("compacted history, removed {removed} rows"),
+                    Err(e) => error!("compaction error: {e}"),
+                }
+            }
+        });
+    }
+
     let mut readings = client.subscribe();
     tokio::spawn(async move {
+        // Readings arrive at ~5 Hz per metric; average them into one row per minute
+        // rather than persisting every sample. The dashboard's live values come from the
+        // in-memory registry, so this costs no visible freshness.
+        let mut aggregator = ReadingAggregator::new(INGEST_BUCKET_SECS);
+        let mut flush = tokio::time::interval(std::time::Duration::from_secs(INGEST_BUCKET_SECS as u64));
+
         loop {
-            match readings.recv().await {
-                Ok(reading) => {
-                    if let Err(e) = db.insert_reading(&reading).await {
-                        error!("DB insert error: {e}");
+            tokio::select! {
+                received = readings.recv() => match received {
+                    Ok(reading) => {
+                        if let Some(averaged) = aggregator.push(&reading) {
+                            if let Err(e) = db.insert_reading_at(&averaged, INGEST_BUCKET_SECS).await {
+                                error!("DB insert error: {e}");
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("readings channel lagged, dropped {n} messages");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                },
+                // Closes buckets for sensors that stopped transmitting mid-window.
+                _ = flush.tick() => {
+                    for averaged in aggregator.drain_before(Utc::now()) {
+                        if let Err(e) = db.insert_reading_at(&averaged, INGEST_BUCKET_SECS).await {
+                            error!("DB insert error: {e}");
+                        }
                     }
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    warn!("readings channel lagged, dropped {n} messages");
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
     });

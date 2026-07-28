@@ -2,16 +2,44 @@
 
 use askama::Template;
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::response::Html;
 use axum::routing::get;
 use chlorophyll_client::{DeviceInfo, ReadingKind};
 use chrono::Utc;
+use serde::Deserialize;
 
 use crate::state::AppState;
 use crate::svg;
 
-const HISTORY_WINDOW_HOURS: i64 = 12;
+/// A selectable history window. `bucket_secs` is chosen so every range yields roughly
+/// 700 points per series — enough to fill the chart's width without shipping a megabyte
+/// of path data for the longer windows.
+pub struct HistoryRange {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub hours: i64,
+    pub bucket_secs: i64,
+}
+
+pub const RANGES: &[HistoryRange] = &[
+    HistoryRange { key: "12h", label: "12 hours", hours: 12, bucket_secs: 60 },
+    HistoryRange { key: "24h", label: "24 hours", hours: 24, bucket_secs: 120 },
+    HistoryRange { key: "7d", label: "7 days", hours: 168, bucket_secs: 900 },
+    HistoryRange { key: "30d", label: "30 days", hours: 720, bucket_secs: 3600 },
+];
+
+const DEFAULT_RANGE: usize = 1;
+
+fn resolve_range(key: Option<&str>) -> &'static HistoryRange {
+    key.and_then(|k| RANGES.iter().find(|r| r.key == k))
+        .unwrap_or(&RANGES[DEFAULT_RANGE])
+}
+
+#[derive(Deserialize, Default)]
+pub struct RangeQuery {
+    range: Option<String>,
+}
 
 pub struct SensorRow {
     pub name: String,
@@ -64,6 +92,9 @@ struct SensorsTableTemplate {
 #[template(path = "sensor_charts.html")]
 struct SensorChartsTemplate {
     charts: Vec<MetricChart>,
+    range_label: &'static str,
+    range_key: &'static str,
+    ranges: &'static [HistoryRange],
 }
 
 pub struct MetricChart {
@@ -76,6 +107,7 @@ pub struct MetricChart {
 struct DashboardTemplate {
     table: String,
     charts: String,
+    range_key: &'static str,
 }
 
 fn build_rows(state: &AppState) -> Vec<SensorRow> {
@@ -84,13 +116,16 @@ fn build_rows(state: &AppState) -> Vec<SensorRow> {
     devices.into_iter().map(SensorRow::from).collect()
 }
 
-async fn build_charts(state: &AppState) -> Result<Vec<MetricChart>, axum::http::StatusCode> {
+async fn build_charts(
+    state: &AppState,
+    range: &HistoryRange,
+) -> Result<Vec<MetricChart>, axum::http::StatusCode> {
     let now = Utc::now();
-    let from = now - chrono::Duration::hours(HISTORY_WINDOW_HOURS);
+    let from = now - chrono::Duration::hours(range.hours);
 
     let series = state
         .db
-        .history_since(from)
+        .history_bucketed(from, now, range.bucket_secs)
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -138,20 +173,34 @@ async fn build_charts(state: &AppState) -> Result<Vec<MetricChart>, axum::http::
     Ok(charts)
 }
 
-async fn dashboard(State(state): State<AppState>) -> Result<Html<String>, axum::http::StatusCode> {
+async fn dashboard(
+    State(state): State<AppState>,
+    Query(query): Query<RangeQuery>,
+) -> Result<Html<String>, axum::http::StatusCode> {
+    let range = resolve_range(query.range.as_deref());
+
     let rows = build_rows(&state);
     let table = SensorsTableTemplate { rows }
         .render()
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let charts = build_charts(&state).await?;
-    let charts = SensorChartsTemplate { charts }
-        .render()
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    let charts = build_charts(&state, range).await?;
+    let charts = SensorChartsTemplate {
+        charts,
+        range_label: range.label,
+        range_key: range.key,
+        ranges: RANGES,
+    }
+    .render()
+    .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let body = DashboardTemplate { table, charts }
-        .render()
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    let body = DashboardTemplate {
+        table,
+        charts,
+        range_key: range.key,
+    }
+    .render()
+    .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Html(body))
 }
@@ -168,11 +217,18 @@ async fn sensors_table_partial(
 
 async fn sensor_charts_partial(
     State(state): State<AppState>,
+    Query(query): Query<RangeQuery>,
 ) -> Result<Html<String>, axum::http::StatusCode> {
-    let charts = build_charts(&state).await?;
-    let body = SensorChartsTemplate { charts }
-        .render()
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    let range = resolve_range(query.range.as_deref());
+    let charts = build_charts(&state, range).await?;
+    let body = SensorChartsTemplate {
+        charts,
+        range_label: range.label,
+        range_key: range.key,
+        ranges: RANGES,
+    }
+    .render()
+    .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Html(body))
 }
 
