@@ -107,6 +107,17 @@ impl Db {
         Ok(series)
     }
 
+    /// Timestamp of the oldest stored reading, if any.
+    ///
+    /// Lets callers turn an open-ended "everything" request into the real data span,
+    /// rather than sizing buckets against the epoch.
+    pub async fn earliest(&self) -> anyhow::Result<Option<DateTime<Utc>>> {
+        let row = sqlx::query_as::<_, (String,)>("SELECT MIN(timestamp) FROM readings")
+            .fetch_optional(&self.0)
+            .await?;
+        row.map(|(ts,)| Ok(ts.parse::<DateTime<Utc>>()?)).transpose()
+    }
+
     /// Downsampled history over `[from, to]`: one averaged point per `bucket_secs` window,
     /// per `(sensor_id, kind)`, ordered ascending.
     ///

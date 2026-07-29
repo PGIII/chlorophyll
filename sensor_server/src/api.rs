@@ -95,11 +95,21 @@ pub struct SensorSeries {
 }
 
 /// Resolve the window and bucket for a history request.
-fn resolve_window(query: &HistoryQuery) -> (DateTime<Utc>, DateTime<Utc>, i64) {
-    let from = Utc
+///
+/// `earliest` is the oldest stored reading; an open-ended `since` is pulled forward to it
+/// so the auto-bucket is sized against real data rather than the epoch.
+fn resolve_window(
+    query: &HistoryQuery,
+    earliest: Option<DateTime<Utc>>,
+) -> (DateTime<Utc>, DateTime<Utc>, i64) {
+    let requested = Utc
         .timestamp_millis_opt(query.since)
         .single()
         .unwrap_or(DateTime::UNIX_EPOCH);
+    let from = match earliest {
+        Some(oldest) if oldest > requested => oldest,
+        _ => requested,
+    };
     let to = query
         .until
         .and_then(|ms| Utc.timestamp_millis_opt(ms).single())
@@ -119,7 +129,12 @@ async fn history_series(
     query: &HistoryQuery,
     only: Option<u128>,
 ) -> Result<Vec<SensorSeries>, axum::http::StatusCode> {
-    let (from, to, bucket) = resolve_window(query);
+    let earliest = state
+        .db
+        .earliest()
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    let (from, to, bucket) = resolve_window(query, earliest);
 
     let series = state
         .db
