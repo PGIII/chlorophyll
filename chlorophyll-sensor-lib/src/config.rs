@@ -39,10 +39,13 @@ fn checksum(data: &[u8]) -> u32 {
 
 /// Try to read a `DeviceConfig` from `storage` at `offset`.
 /// Returns `None` if the sector is uninitialised, corrupted, or the checksum fails.
-/// Accepts any `ReadStorage` (NOR flash, EEPROM, RAM mock, …) — only `read` is required.
+///
+/// Bound is `ReadNorFlash` rather than the more general `ReadStorage` because
+/// `embassy_rp::flash::Flash` — the only caller — implements the former and not the
+/// latter. It also matches [`save`], which needs `NorFlash` to erase.
 pub fn load<S>(storage: &mut S, offset: u32) -> Option<DeviceConfig>
 where
-    S: embedded_storage::ReadStorage,
+    S: embedded_storage::nor_flash::ReadNorFlash,
 {
     let mut buf = [0u8; 8 + MAX_PAYLOAD];
     storage.read(offset, &mut buf).ok()?;
