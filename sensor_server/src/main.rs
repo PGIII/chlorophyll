@@ -1,6 +1,9 @@
 #![warn(clippy::pedantic)]
 
-use std::sync::Arc;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use chlorophyll_client::db::Db;
 use chlorophyll_client::rollup::{INGEST_BUCKET_SECS, ReadingAggregator};
@@ -12,12 +15,55 @@ use tracing_subscriber::EnvFilter;
 
 const DEFAULT_HTTP_PORT: u16 = 5001;
 
+/// Hard ceiling for the `CHLOROPHYLL_LOG` file. The server writes a few KB a day, so this
+/// is a runaway guard rather than a rotation scheme: on overflow the file starts over.
+const MAX_LOG_BYTES: u64 = 512 * 1024 * 1024;
+
+struct CappedLog {
+    path: PathBuf,
+    file: File,
+    written: u64,
+    max: u64,
+}
+
+impl CappedLog {
+    fn open(path: PathBuf, max: u64) -> std::io::Result<Self> {
+        let file = OpenOptions::new().create(true).append(true).open(&path)?;
+        let written = file.metadata()?.len();
+        Ok(Self { path, file, written, max })
+    }
+}
+
+impl Write for CappedLog {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.written + buf.len() as u64 > self.max {
+            self.file = File::create(&self.path)?;
+            let marker = format!("--- log restarted: exceeded {} bytes ---\n", self.max);
+            self.file.write_all(marker.as_bytes())?;
+            self.written = marker.len() as u64;
+        }
+        let n = self.file.write(buf)?;
+        self.written += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+    match std::env::var("CHLOROPHYLL_LOG") {
+        Ok(path) => tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_ansi(false)
+            .with_writer(Mutex::new(CappedLog::open(PathBuf::from(path), MAX_LOG_BYTES)?))
+            .init(),
+        Err(_) => tracing_subscriber::fmt().with_env_filter(filter).init(),
+    }
 
     let args: Vec<String> = std::env::args().collect();
 
@@ -125,4 +171,30 @@ async fn main() -> color_eyre::Result<()> {
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restarts_instead_of_growing_past_the_cap() {
+        let path = std::env::temp_dir().join("capped_log_test.log");
+        let _ = std::fs::remove_file(&path);
+
+        let mut log = CappedLog::open(path.clone(), 200).unwrap();
+        for _ in 0..50 {
+            log.write_all(b"0123456789012345678901234567890123456789\n").unwrap();
+        }
+        log.flush().unwrap();
+
+        let len = std::fs::metadata(&path).unwrap().len();
+        assert!(len <= 200, "log grew to {len} bytes, past the 200 byte cap");
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.starts_with("--- log restarted: exceeded 200 bytes ---"));
+        assert!(contents.ends_with("0123456789012345678901234567890123456789\n"));
+
+        std::fs::remove_file(&path).unwrap();
+    }
 }

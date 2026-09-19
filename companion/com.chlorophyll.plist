@@ -29,10 +29,13 @@
         <string>/Users/prestongarrisoniii/dev/source/chlorophyll/data/chlorophyll.db</string>
         <key>CHLOROPHYLL_HTTP_PORT</key>
         <string>5001</string>
+        <!-- The server writes and size-caps this itself; launchd cannot rotate. -->
+        <key>CHLOROPHYLL_LOG</key>
+        <string>/Users/prestongarrisoniii/dev/source/chlorophyll/data/server.log</string>
     </dict>
 
     <key>StandardOutPath</key>
-    <string>/Users/prestongarrisoniii/dev/source/chlorophyll/data/server.log</string>
+    <string>/dev/null</string>
     <key>StandardErrorPath</key>
     <string>/Users/prestongarrisoniii/dev/source/chlorophyll/data/server.err</string>
 </dict>

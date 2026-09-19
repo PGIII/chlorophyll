@@ -16,6 +16,11 @@ use crate::reading::Reading;
 /// Re-send `RequestSensorInfo` roughly this often (one tick per `recv_from` timeout).
 const REQUEST_INFO_INTERVAL: Duration = Duration::from_secs(30);
 
+/// Undecodable packets are counted and summarized this often. A sensor running firmware
+/// newer than this crate's `Packet` definition sprays these at its full sample rate, which
+/// is far too fast to log one line apiece.
+const DECODE_ERROR_REPORT_INTERVAL: Duration = Duration::from_secs(60);
+
 fn bind_multicast(group: Ipv4Addr, port: u16) -> Result<UdpSocket> {
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, None)?;
     socket.set_reuse_address(true)?;
@@ -55,6 +60,9 @@ pub fn run(
 
     let mut buf = [0u8; 1500];
     let mut last_request = Instant::now();
+    let mut decode_errors: u64 = 0;
+    let mut decode_error_sample: Option<String> = None;
+    let mut last_decode_report = Instant::now();
 
     loop {
         match socket.recv_from(&mut buf) {
@@ -68,11 +76,27 @@ pub fn run(
                             let _ = tx.send(reading);
                         }
                     }
-                    Err(e) => tracing::warn!("chlorophyll-client: decode failed (len {len}): {e}"),
+                    Err(e) => {
+                        decode_errors += 1;
+                        if decode_error_sample.is_none() {
+                            decode_error_sample = Some(format!("len {len}: {e}"));
+                        }
+                        tracing::trace!("chlorophyll-client: decode failed (len {len}): {e}");
+                    }
                 }
             }
             Err(ref e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
             Err(e) => tracing::warn!("chlorophyll-client: recv error: {e}"),
+        }
+
+        if decode_errors > 0 && last_decode_report.elapsed() >= DECODE_ERROR_REPORT_INTERVAL {
+            let sample = decode_error_sample.take().unwrap_or_default();
+            tracing::warn!(
+                "chlorophyll-client: dropped {decode_errors} undecodable packets in the last {}s (first: {sample})",
+                last_decode_report.elapsed().as_secs()
+            );
+            decode_errors = 0;
+            last_decode_report = Instant::now();
         }
 
         if last_request.elapsed() >= REQUEST_INFO_INTERVAL {
